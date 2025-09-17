@@ -17,6 +17,10 @@ class RolloutMain:
         "MtAct",
         "DiffusionPolicy",
         "DiffusionPolicy3d",
+        "CnnMlp",
+        "CnnReservoir",
+        "CnnDwTcn",
+        "P2e"
     ]
 
     def __init__(self):

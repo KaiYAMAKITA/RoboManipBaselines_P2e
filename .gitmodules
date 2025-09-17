@@ -27,3 +27,6 @@
 [submodule "third_party/pyorbbecsdk"]
 	path = third_party/pyorbbecsdk
 	url = https://github.com/orbbec/pyorbbecsdk.git
+[submodule "third_party/SimpleDreamer"]
+	path = third_party/SimpleDreamer
+	url = https://github.com/kc-ml2/SimpleDreamer.git
