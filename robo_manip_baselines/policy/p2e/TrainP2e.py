@@ -4,6 +4,7 @@ from torch.utils.tesorboard import SummaryWriter
 from tqdm import tqdm
 import argparse
 from robo_manip_baselines.common import TrainBase
+import importlib
 
 
 try:
@@ -38,20 +39,43 @@ def load_config(config_path: str) -> AttrDict:
 
 class TrainP2e(TrainBase):
     DatasetClass = P2eDataset
-    
-    replay_buffer = RolloutP2e()
-    replay_buffer.args.save_rollout = True
+    def __init__(self):
+        super().__init__()
 
-    #define P2E
-    config = load_config("../third_party/SimpleDreamer/dreamer/configs/p2e-dmc-walker-walk.yml")
-    p2e = Plan2Explore(
-        observation_shape=(3, 480, 640),
-        discrete_action_bool=False,
-        action_size=7,
-        writer=SummaryWriter(log_dir="/tmp"),
-        device="cuda",
-        config=config,
-    )
+        self.setup_policy()
+        
+        
+        self.replay_buffer = RolloutP2e()
+        self.replay_buffer.args.save_rollout = True
+    def setup_env(self):
+        env_utils_spec = importlib.util.spec_from_file_location(
+            "EnvUtils",
+            os.path.join(os.path.dirname(__file__), "..", "common/utils/EnvUtils.py"),
+        )
+        env_utils_module = importlib.util.module_from_spec(env_utils_spec)
+        self.operation_parent_module_str = "robo_manip_baselines.envs.operation"
+        
+        if self.args.envs is not None:
+            self.env = self.args.envs
+            self.operation_module = importlib.import_module(
+                f"{self.operation_parent_module_str}.Operation{self.env}"
+            )
+            self.OperationEnvClass = getattr(self.operation_module, f"Operation{self.env}")
+        else:
+            assert False, "Please specify --envs"
+        
+
+    def setup_policy(self):
+        #define P2E
+        self.config = load_config("../third_party/SimpleDreamer/dreamer/configs/p2e-dmc-walker-walk.yml")
+        self.p2e = Plan2Explore(
+            observation_shape=(3, 480, 640),
+            discrete_action_bool=False,
+            action_size=7,
+            writer=SummaryWriter(log_dir="/tmp"),
+            device="cuda",
+            config=self.config,
+        )
 
     def set_additional_args(self, parser):
         parser.set_defaults(enable_rmb_cache=True)
@@ -59,6 +83,10 @@ class TrainP2e(TrainBase):
         parser.set_defaults(batch_size=32)
         parser.set_defaults(num_epochs=40)
         parser.set_defaults(lr=1e-5)
+
+        parser.add_argument(
+            "--envs", type=str, default=None, help="environments"
+        )
 
         parser.add_argument(
             "--weight_decay", type=float, default=1e-4, help="weight decay"
@@ -165,10 +193,17 @@ class TrainP2e(TrainBase):
                 # Update best checkpoint
                 self.update_best_ckpt(epoch_summary)
             """
+            
             #collect replay buffer
             for _ in range(3):
                 self.replay_buffer.run(self.policy, self.args.num_envs)
-                
+                #parser.get_parser(), args1 = parser.parse_args(["--save_rollout", "True"])としたいが、よくわからないので便宜上直接代入することとすru
+
+
+
+            aa
+
+
 
 
             # Save current checkpoint
