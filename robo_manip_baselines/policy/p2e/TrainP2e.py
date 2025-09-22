@@ -5,6 +5,7 @@ from tqdm import tqdm
 import argparse
 from robo_manip_baselines.common import TrainBase
 import importlib
+import os
 
 
 try:
@@ -194,6 +195,11 @@ class TrainP2e(TrainBase):
                 self.update_best_ckpt(epoch_summary)
             """
             
+            replay_buffer_num = 20
+            dataset_dir = "ddir"
+            if len(os.listdir(dataset_dir)) >= replay_buffer_num:
+                os.remove(os.path.join(dataset_dir, os.listdir(dataset_dir).sort()[:len(os.listdir(dataset_dir))-replay_buffer_num]))
+
             #collect replay buffer
             for _ in range(3):
                 self.replay_buffer.run(self.policy, self.args.num_envs)
@@ -201,7 +207,6 @@ class TrainP2e(TrainBase):
 
 
 
-            aa
 
 
 

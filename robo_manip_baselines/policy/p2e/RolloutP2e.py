@@ -2,7 +2,7 @@ import cv2
 import matplotlib.pylab as plt
 import numpy as np
 import torch
-
+import os 
 from robo_manip_baselines.common import RolloutBase, denormalize_data, normalize_data
 
 from .P2ePolicy import P2ePolicy
