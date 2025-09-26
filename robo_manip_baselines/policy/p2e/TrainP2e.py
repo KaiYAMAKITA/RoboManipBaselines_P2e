@@ -1,6 +1,6 @@
 import torch
 from torch.nn import functional as F
-from torch.utils.tesorboard import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import argparse
 from robo_manip_baselines.common import TrainBase
@@ -42,10 +42,15 @@ class TrainP2e(TrainBase):
     DatasetClass = P2eDataset
     def __init__(self):
         super().__init__()
+        print(f"TrainP2e {sys.argv}")
 
         self.setup_policy()
+        self.setup_env()
         
-        
+        # sys.argvにダミーの--checkpointを追加
+        #import sys
+        if "--checkpoint" not in sys.argv:
+            sys.argv += ["--checkpoint", ""]
         self.replay_buffer = RolloutP2e()
         self.replay_buffer.args.save_rollout = True
     def setup_env(self):
@@ -56,14 +61,14 @@ class TrainP2e(TrainBase):
         env_utils_module = importlib.util.module_from_spec(env_utils_spec)
         self.operation_parent_module_str = "robo_manip_baselines.envs.operation"
         
-        if self.args.envs is not None:
-            self.env = self.args.envs
+        if self.args.environment is not None:
+            self.env = self.args.environment
             self.operation_module = importlib.import_module(
                 f"{self.operation_parent_module_str}.Operation{self.env}"
             )
             self.OperationEnvClass = getattr(self.operation_module, f"Operation{self.env}")
         else:
-            assert False, "Please specify --envs"
+            assert False, "Please specify --environment"
         
 
     def setup_policy(self):
@@ -86,7 +91,7 @@ class TrainP2e(TrainBase):
         parser.set_defaults(lr=1e-5)
 
         parser.add_argument(
-            "--envs", type=str, default=None, help="environments"
+            "--environment", type=str, default=None, help="environments"
         )
 
         parser.add_argument(

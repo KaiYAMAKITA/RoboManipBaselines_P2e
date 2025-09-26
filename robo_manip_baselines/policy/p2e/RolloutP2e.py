@@ -4,12 +4,13 @@ import numpy as np
 import torch
 import os 
 from robo_manip_baselines.common import RolloutBase, denormalize_data, normalize_data
-
+import sys
 from .P2ePolicy import P2ePolicy
 
 
 class RolloutP2e(RolloutBase):
     def setup_policy(self):
+        print(f"RolloutP2e {sys.argv}")
         # Print policy information
         self.print_policy_info()
         print(
