@@ -44,6 +44,7 @@ class TrainP2e(TrainBase):
         super().__init__()
         print(f"TrainP2e {sys.argv}")
 
+        self.setup_args_all()
         self.setup_policy()
         self.setup_env()
         
@@ -51,14 +52,23 @@ class TrainP2e(TrainBase):
         #import sys
         if "--checkpoint" not in sys.argv:
             sys.argv += ["--checkpoint", ""]
+        self.excluded_args = []
+        print(f"sys.argv: {sys.argv}")
+        #sys.argvからrolloutに必要なargumentを削除する
+        arg = sys.argv.index("--dataset_dir")
+        del sys.argv[arg:arg+2]
+        arg = sys.argv.index("--environment")
+        del sys.argv[arg:arg+2]
+
         self.replay_buffer = RolloutP2e()
         self.replay_buffer.args.save_rollout = True
     def setup_env(self):
         env_utils_spec = importlib.util.spec_from_file_location(
             "EnvUtils",
-            os.path.join(os.path.dirname(__file__), "..", "common/utils/EnvUtils.py"),
+            os.path.join(os.path.dirname(__file__), "../..", "common/utils/EnvUtils.py"),
         )
         env_utils_module = importlib.util.module_from_spec(env_utils_spec)
+        env_utils_spec.loader.exec_module(env_utils_module)
         self.operation_parent_module_str = "robo_manip_baselines.envs.operation"
         
         if self.args.environment is not None:
@@ -82,6 +92,19 @@ class TrainP2e(TrainBase):
             device="cuda",
             config=self.config,
         )
+    def setup_args_all(self, parser=None, argv=None):
+        if parser is None:
+            parser = argparse.ArgumentParser(
+                formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+                exit_on_error=False, #for debug
+            )
+
+        self.set_additional_args(parser)
+
+        #if argv is None:
+        #    argv = sys.argv
+        #self.args, remaining_argv = parser.parse_known_args(argv[1:])
+        #sys.argv = [sys.argv[0]] + remaining_argv
 
     def set_additional_args(self, parser):
         parser.set_defaults(enable_rmb_cache=True)
@@ -90,8 +113,9 @@ class TrainP2e(TrainBase):
         parser.set_defaults(num_epochs=40)
         parser.set_defaults(lr=1e-5)
 
+        #Rollout.pyを踏襲
         parser.add_argument(
-            "--environment", type=str, default=None, help="environments"
+            "--environment", type=str, default=None, help="environment"
         )
 
         parser.add_argument(
