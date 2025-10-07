@@ -64,44 +64,18 @@ class TrainP2e(TrainBase):
         #self.replay_buffer = RolloutP2e()
         #self.replay_buffer.args.save_rollout = True
     def setup_env(self):
-        if "--checkpoint" not in sys.argv:
-            sys.argv += ["--checkpoint", ""]
-        self.excluded_args = []
-        print(f"sys.argv: {sys.argv}")
-        from robo_manip_baselines.common import camel_to_snake, remove_prefix
-        env_utils_spec = importlib.util.spec_from_file_location(
-            "EnvUtils",
-            os.path.join(os.path.dirname(__file__), "../..", "common/utils/EnvUtils.py"),
-        )
-        print(f"これ実行されますかね： {self.args}")
-        env_utils_module = importlib.util.module_from_spec(env_utils_spec)
-        env_utils_spec.loader.exec_module(env_utils_module)
-        self.operation_parent_module_str = "robo_manip_baselines.envs.operation"
-        self.policy_parent_module_str = "robo_manip_baselines.policy"
-        if self.args.env is not None:
-            self.operation_module = importlib.import_module(
-                f"{self.operation_parent_module_str}.Operation{self.args.env}"
-            )
-            self.OperationEnvClass = getattr(self.operation_module, f"Operation{self.args.env}")
-            self.policy_module = importlib.import_module(
-                f"{self.policy_parent_module_str}.{camel_to_snake(self.args.policy)}"
-            )
-            self.RolloutPolicyClass = getattr(self.policy_module, f"Rollout{self.args.policy}")
-        else:
-            assert False, "Please specify --environment"
-        class Rollout(self.OperationEnvClass, self.RolloutPolicyClass):
-            @property
-            def policy_name(self):
-                return remove_prefix(self.RolloutPolicyClass.__name__, "Rollout")
-            
-        if self.args.config is None:
-            config = {}
-        else:
-            with open(self.args.config, "r") as f:
-                config = yaml.safe_load(f)
+        #case1
+        from robo_manip_baselines.bin.Rollout import RolloutMain
         
-        self.replay_buffer = Rollout(**config)
+        train_arg_buffer = sys.argv.copy()
+        envarg = sys.argv[sys.argv.index("--env")+1]
+        sys.argv = [sys.argv[0]] + ["P2e", envarg]
+        self.replay_buffer = RolloutMain()
+        
+        sys.argv = [sys.argv[0]] + ["--checkpoint", ""]
+
         self.replay_buffer.args.save_rollout = True
+        
 
     def setup_policy(self):
         #define P2E
@@ -121,12 +95,15 @@ class TrainP2e(TrainBase):
         parser.set_defaults(batch_size=32)
         parser.set_defaults(num_epochs=40)
         parser.set_defaults(lr=1e-5)
-        print("これが実行されている")
-        #Rollout.pyを踏襲
+
+        
         parser.add_argument(
-            "--env", type=str, default=None, help="environment"
+            "--policy", default="P2e", type=str, help="policy"
         )
 
+        parser.add_argument(
+            "--env", type=str, help="environment"
+        )
         parser.add_argument(
             "--weight_decay", type=float, default=1e-4, help="weight decay"
         )
@@ -203,6 +180,8 @@ class TrainP2e(TrainBase):
         )
 
     def train_loop(self):
+        rb_path = os.path.join(self.args.checkpoint_dir, "replay_buffer")
+        os.makedirs(rb_path, exist_ok=True)
         for epoch in tqdm(range(self.args.num_epochs)):
             # Run train step
             """a = 0
@@ -233,10 +212,10 @@ class TrainP2e(TrainBase):
                 self.update_best_ckpt(epoch_summary)
             """
             
+            print(self.args.checkpoint_dir)
             replay_buffer_num = 20
-            dataset_dir = "ddir"
-            if len(os.listdir(dataset_dir)) >= replay_buffer_num:
-                os.remove(os.path.join(dataset_dir, os.listdir(dataset_dir).sort()[:len(os.listdir(dataset_dir))-replay_buffer_num]))
+            if len(os.listdir(rb_path)) >= replay_buffer_num:
+                os.remove(os.path.join(rb_path, os.listdir(rb_path).sort()[:len(os.listdir(rb_path))-replay_buffer_num]))
 
             #collect replay buffer
             for _ in range(3):
