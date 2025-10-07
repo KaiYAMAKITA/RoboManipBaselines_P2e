@@ -44,7 +44,6 @@ class TrainP2e(TrainBase):
     policy_parent_module_str = "robo_manip_baselines.policy"
     def __init__(self):
         super().__init__()
-        print(f"TrainP2e {sys.argv}")
 
         #self.setup_args_all()
         self.setup_policy()
@@ -71,9 +70,8 @@ class TrainP2e(TrainBase):
         envarg = sys.argv[sys.argv.index("--env")+1]
         sys.argv = [sys.argv[0]] + ["P2e", envarg]
         self.replay_buffer = RolloutMain()
+        self.replay_buffer.checkpoint = self.args.checkpoint_dir
         
-        sys.argv = [sys.argv[0]] + ["--checkpoint", ""]
-
         self.replay_buffer.args.save_rollout = True
         
 
@@ -159,13 +157,6 @@ class TrainP2e(TrainBase):
         )
         self.policy.cuda()
 
-        # 暫定
-        # self.policy = Plan2Explore(...)
-
-        # for environment interaction
-        # self.rollout = Rollout(...)  # from RolloutP2e.py
-        # self.rollout.run === environment_interaction
-
         # Construct optimizer
         self.optimizer = torch.optim.AdamW(
             self.policy.parameters(),
@@ -212,14 +203,16 @@ class TrainP2e(TrainBase):
                 self.update_best_ckpt(epoch_summary)
             """
             
-            print(self.args.checkpoint_dir)
+            self.replay_buffer.args.checkpoint = os.path.join(self.args.checkpoint_dir, "dummy")
+            
             replay_buffer_num = 20
             if len(os.listdir(rb_path)) >= replay_buffer_num:
                 os.remove(os.path.join(rb_path, os.listdir(rb_path).sort()[:len(os.listdir(rb_path))-replay_buffer_num]))
 
             #collect replay buffer
             for _ in range(3):
-                self.replay_buffer.run(self.policy, self.args.num_envs)
+                print("ここまで来た。")
+                self.replay_buffer.run()
                 #parser.get_parser(), args1 = parser.parse_args(["--save_rollout", "True"])としたいが、よくわからないので便宜上直接代入することとすru
 
 
