@@ -40,46 +40,68 @@ def load_config(config_path: str) -> AttrDict:
 
 class TrainP2e(TrainBase):
     DatasetClass = P2eDataset
+    operation_parent_module_str = "robo_manip_baselines.envs.operation"
+    policy_parent_module_str = "robo_manip_baselines.policy"
     def __init__(self):
         super().__init__()
         print(f"TrainP2e {sys.argv}")
 
-        self.setup_args_all()
+        #self.setup_args_all()
         self.setup_policy()
         self.setup_env()
         
         # sys.argvにダミーの--checkpointを追加
         #import sys
+        #if "--checkpoint" not in sys.argv:
+        #    sys.argv += ["--checkpoint", ""]
+        #self.excluded_args = []
+        #print(f"sys.argv: {sys.argv}")
+        #sys.argvからrolloutに必要なargumentを削除する
+        #arg = sys.argv.index("--dataset_dir")
+        #del sys.argv[arg:arg+2]
+
+        #これをsetup_env内でどうにかする
+        #self.replay_buffer = RolloutP2e()
+        #self.replay_buffer.args.save_rollout = True
+    def setup_env(self):
         if "--checkpoint" not in sys.argv:
             sys.argv += ["--checkpoint", ""]
         self.excluded_args = []
         print(f"sys.argv: {sys.argv}")
-        #sys.argvからrolloutに必要なargumentを削除する
-        arg = sys.argv.index("--dataset_dir")
-        del sys.argv[arg:arg+2]
-        arg = sys.argv.index("--environment")
-        del sys.argv[arg:arg+2]
-
-        self.replay_buffer = RolloutP2e()
-        self.replay_buffer.args.save_rollout = True
-    def setup_env(self):
+        from robo_manip_baselines.common import camel_to_snake, remove_prefix
         env_utils_spec = importlib.util.spec_from_file_location(
             "EnvUtils",
             os.path.join(os.path.dirname(__file__), "../..", "common/utils/EnvUtils.py"),
         )
+        print(f"これ実行されますかね： {self.args}")
         env_utils_module = importlib.util.module_from_spec(env_utils_spec)
         env_utils_spec.loader.exec_module(env_utils_module)
         self.operation_parent_module_str = "robo_manip_baselines.envs.operation"
-        
-        if self.args.environment is not None:
-            self.env = self.args.environment
+        self.policy_parent_module_str = "robo_manip_baselines.policy"
+        if self.args.env is not None:
             self.operation_module = importlib.import_module(
-                f"{self.operation_parent_module_str}.Operation{self.env}"
+                f"{self.operation_parent_module_str}.Operation{self.args.env}"
             )
-            self.OperationEnvClass = getattr(self.operation_module, f"Operation{self.env}")
+            self.OperationEnvClass = getattr(self.operation_module, f"Operation{self.args.env}")
+            self.policy_module = importlib.import_module(
+                f"{self.policy_parent_module_str}.{camel_to_snake(self.args.policy)}"
+            )
+            self.RolloutPolicyClass = getattr(self.policy_module, f"Rollout{self.args.policy}")
         else:
             assert False, "Please specify --environment"
+        class Rollout(self.OperationEnvClass, self.RolloutPolicyClass):
+            @property
+            def policy_name(self):
+                return remove_prefix(self.RolloutPolicyClass.__name__, "Rollout")
+            
+        if self.args.config is None:
+            config = {}
+        else:
+            with open(self.args.config, "r") as f:
+                config = yaml.safe_load(f)
         
+        self.replay_buffer = Rollout(**config)
+        self.replay_buffer.args.save_rollout = True
 
     def setup_policy(self):
         #define P2E
@@ -92,19 +114,6 @@ class TrainP2e(TrainBase):
             device="cuda",
             config=self.config,
         )
-    def setup_args_all(self, parser=None, argv=None):
-        if parser is None:
-            parser = argparse.ArgumentParser(
-                formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-                exit_on_error=False, #for debug
-            )
-
-        self.set_additional_args(parser)
-
-        #if argv is None:
-        #    argv = sys.argv
-        #self.args, remaining_argv = parser.parse_known_args(argv[1:])
-        #sys.argv = [sys.argv[0]] + remaining_argv
 
     def set_additional_args(self, parser):
         parser.set_defaults(enable_rmb_cache=True)
@@ -112,10 +121,10 @@ class TrainP2e(TrainBase):
         parser.set_defaults(batch_size=32)
         parser.set_defaults(num_epochs=40)
         parser.set_defaults(lr=1e-5)
-
+        print("これが実行されている")
         #Rollout.pyを踏襲
         parser.add_argument(
-            "--environment", type=str, default=None, help="environment"
+            "--env", type=str, default=None, help="environment"
         )
 
         parser.add_argument(
