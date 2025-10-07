@@ -45,23 +45,10 @@ class TrainP2e(TrainBase):
     def __init__(self):
         super().__init__()
 
-        #self.setup_args_all()
         self.setup_policy()
         self.setup_env()
         
-        # sys.argvにダミーの--checkpointを追加
-        #import sys
-        #if "--checkpoint" not in sys.argv:
-        #    sys.argv += ["--checkpoint", ""]
-        #self.excluded_args = []
-        #print(f"sys.argv: {sys.argv}")
-        #sys.argvからrolloutに必要なargumentを削除する
-        #arg = sys.argv.index("--dataset_dir")
-        #del sys.argv[arg:arg+2]
-
-        #これをsetup_env内でどうにかする
-        #self.replay_buffer = RolloutP2e()
-        #self.replay_buffer.args.save_rollout = True
+        
     def setup_env(self):
         #case1
         from robo_manip_baselines.bin.Rollout import RolloutMain
@@ -69,9 +56,14 @@ class TrainP2e(TrainBase):
         train_arg_buffer = sys.argv.copy()
         envarg = sys.argv[sys.argv.index("--env")+1]
         sys.argv = [sys.argv[0]] + ["P2e", envarg]
+        #sys.argv += ["--checkpoint", self.args.checkpoint_dir]
         self.replay_buffer = RolloutMain()
-        self.replay_buffer.checkpoint = self.args.checkpoint_dir
-        
+        self.replay_buffer.args.checkpoint = self.args.checkpoint_dir
+        #print("sdasda")
+        #print(self.replay_buffer.args)
+        self.args.dataset_dir = os.path.join(self.args.checkpoint_dir, "replay_buffer")
+        print(f"sdf{self.args.dataset_dir}")
+
         self.replay_buffer.args.save_rollout = True
         
 
