@@ -44,8 +44,10 @@ class TrainP2e(TrainBase):
     policy_parent_module_str = "robo_manip_baselines.policy"
     def __init__(self):
         super().__init__()
+        print("aa")
 
         self.setup_policy()
+        print("aaaaa")
         self.setup_env()
         
         
@@ -65,19 +67,8 @@ class TrainP2e(TrainBase):
         print(f"sdf{self.args.dataset_dir}")
 
         self.replay_buffer.args.save_rollout = True
+        self.replay_buffer.args.auto_exit = True
         
-
-    def setup_policy(self):
-        #define P2E
-        self.config = load_config("../third_party/SimpleDreamer/dreamer/configs/p2e-dmc-walker-walk.yml")
-        self.p2e = Plan2Explore(
-            observation_shape=(3, 480, 640),
-            discrete_action_bool=False,
-            action_size=7,
-            writer=SummaryWriter(log_dir="/tmp"),
-            device="cuda",
-            config=self.config,
-        )
 
     def set_additional_args(self, parser):
         parser.set_defaults(enable_rmb_cache=True)
@@ -140,21 +131,35 @@ class TrainP2e(TrainBase):
             "state_feature_dim": self.args.state_feature_dim,
         }
 
+        #define P2E
+        self.config = load_config("../third_party/SimpleDreamer/dreamer/configs/p2e-dmc-walker-walk.yml")
+        self.policy = Plan2Explore(
+            observation_shape=(3, 480, 640),
+            discrete_action_bool=False,
+            action_size=7,
+            writer=SummaryWriter(log_dir="/tmp"),
+            device="cuda",
+            config=self.config,
+        )
+        print("aaa")
+        """
         # Construct policy
         self.policy = P2ePolicy(
             len(self.model_meta_info["state"]["example"]),
             len(self.model_meta_info["action"]["example"]),
             len(self.args.camera_names),
             **self.model_meta_info["policy"]["args"],
-        )
-        self.policy.cuda()
+        )"""
+        #self.policy.cuda()
 
+        """
         # Construct optimizer
         self.optimizer = torch.optim.AdamW(
             self.policy.parameters(),
             lr=self.args.lr,
             weight_decay=self.args.weight_decay,
         )
+        """
 
         # Print policy information
         self.print_policy_info()
@@ -202,10 +207,22 @@ class TrainP2e(TrainBase):
                 os.remove(os.path.join(rb_path, os.listdir(rb_path).sort()[:len(os.listdir(rb_path))-replay_buffer_num]))
 
             #collect replay buffer
-            for _ in range(3):
-                print("ここまで来た。")
-                self.replay_buffer.run()
-                #parser.get_parser(), args1 = parser.parse_args(["--save_rollout", "True"])としたいが、よくわからないので便宜上直接代入することとすru
+            print(self.config)
+            for iteration in range(self.config.parameters.dreamer.train_iterations):
+                if iteration % self.config.parameters.dreamer.collect_interval == 0:
+                    for _ in range(self.config.parameters.dreamer.batch_size):
+                        print("ここまで来た。")
+                        self.replay_buffer.run() #これはenvironment_interactionを利用する想定。この中でp2eの学習に必要な要素が揃う。
+                        #parser.get_parser(), args1 = parser.parse_args(["--save_rollout", "True"])としたいが、よくわからないので便宜上直接代入することとすru
+                    #setup_dataset
+                    self.setup_dataset()
+                #dataの型が合わない（done, rewardはともかくnextobservationをどう入れるか）
+                #plan2exploreの333行目
+                #rollout-> run -> reward
+                for data in self.train_dataloader:
+                    self.policy.update(data[0], data[1], data[2])
+                
+                
 
 
 
