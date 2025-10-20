@@ -44,27 +44,35 @@ class TrainP2e(TrainBase):
     policy_parent_module_str = "robo_manip_baselines.policy"
     def __init__(self):
         super().__init__()
-        print("aa")
-
+        #print("aa")
+        #print(f"{sys.argv}aaaaaadasdasdasdasd")
         self.setup_policy()
-        print("aaaaa")
+        #print(f"]]]]]]]]]]]]]]{sys.argv}")
+        #print("aaaaa")
         self.setup_env()
+        #print(f"@@@@@@@@@@@@@@{sys.argv}")
         
         
     def setup_env(self):
         #case1
         from robo_manip_baselines.bin.Rollout import RolloutMain
         
-        train_arg_buffer = sys.argv.copy()
+        print(f"]/]/]/]/]/ {sys.argv}")
+        argcd = sys.argv[sys.argv.index("--checkpoint")+1] 
         envarg = sys.argv[sys.argv.index("--env")+1]
-        sys.argv = [sys.argv[0]] + ["P2e", envarg]
+        sys.argv = [sys.argv[0]] + ["P2e", envarg] + ["--checkpoint", argcd]
         #sys.argv += ["--checkpoint", self.args.checkpoint_dir]
+        
+        # checkpointはreplaybuffer用
+        # checkpoint=dirはその他
         self.replay_buffer = RolloutMain()
+        print(f"これをみよ {self.replay_buffer.args}")
+        print(sys.argv)
         self.replay_buffer.args.checkpoint = self.args.checkpoint_dir
         #print("sdasda")
         #print(self.replay_buffer.args)
         self.args.dataset_dir = os.path.join(self.args.checkpoint_dir, "replay_buffer")
-        print(f"sdf{self.args.dataset_dir}")
+        #print(f"sdf{self.args.dataset_dir}")
 
         self.replay_buffer.args.save_rollout = True
         self.replay_buffer.args.auto_exit = True
@@ -133,7 +141,7 @@ class TrainP2e(TrainBase):
 
         #define P2E
         self.config = load_config("../third_party/SimpleDreamer/dreamer/configs/p2e-dmc-walker-walk.yml")
-        self.policy = Plan2Explore(
+        self.p2e = Plan2Explore(
             observation_shape=(3, 480, 640),
             discrete_action_bool=False,
             action_size=7,
@@ -141,7 +149,9 @@ class TrainP2e(TrainBase):
             device="cuda",
             config=self.config,
         )
-        print("aaa")
+
+        self.policy = P2ePolicy(p2e=self.p2e)
+
         """
         # Construct policy
         self.policy = P2ePolicy(
@@ -214,6 +224,7 @@ class TrainP2e(TrainBase):
                         print("ここまで来た。")
                         self.replay_buffer.run() #これはenvironment_interactionを利用する想定。この中でp2eの学習に必要な要素が揃う。
                         #parser.get_parser(), args1 = parser.parse_args(["--save_rollout", "True"])としたいが、よくわからないので便宜上直接代入することとすru
+                        print("ここまでは？")
                     #setup_dataset
                     self.setup_dataset()
                 #dataの型が合わない（done, rewardはともかくnextobservationをどう入れるか）
