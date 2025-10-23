@@ -43,6 +43,12 @@ class TrainP2e(TrainBase):
     operation_parent_module_str = "robo_manip_baselines.envs.operation"
     policy_parent_module_str = "robo_manip_baselines.policy"
     def __init__(self):
+        
+        print("はじめ")
+        print(sys.argv)
+        self.stash = [sys.argv[sys.argv.index("--checkpoint")], sys.argv[sys.argv.index("--checkpoint")+1]]
+        del sys.argv[sys.argv.index("--checkpoint")+1]
+        del sys.argv[sys.argv.index("--checkpoint")]
         super().__init__()
         print("こん")
         #print("aa")
@@ -59,9 +65,8 @@ class TrainP2e(TrainBase):
         from robo_manip_baselines.bin.Rollout import RolloutMain
         
         print(f"]/]/]/]/]/ {sys.argv}")
-        argcd = sys.argv[sys.argv.index("--checkpoint")+1] 
         envarg = sys.argv[sys.argv.index("--env")+1]
-        sys.argv = [sys.argv[0]] + ["P2e", envarg] + ["--checkpoint", argcd]
+        sys.argv = [sys.argv[0]] + ["P2e", envarg] + self.stash
         #sys.argv += ["--checkpoint", self.args.checkpoint_dir]
         
         # checkpointはreplaybuffer用
@@ -80,6 +85,7 @@ class TrainP2e(TrainBase):
         
 
     def set_additional_args(self, parser):
+        print("aaaaaaaっs")
         parser.set_defaults(enable_rmb_cache=True)
 
         parser.set_defaults(batch_size=32)
@@ -123,6 +129,7 @@ class TrainP2e(TrainBase):
             default=1,
             help="number of steps in the action sequence to output from the policy",
         )
+        print("dd")
 
 
     def setup_model_meta_info(self):
