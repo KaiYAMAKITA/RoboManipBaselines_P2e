@@ -44,6 +44,7 @@ class TrainP2e(TrainBase):
     policy_parent_module_str = "robo_manip_baselines.policy"
     def __init__(self):
         super().__init__()
+        print("こん")
         #print("aa")
         #print(f"{sys.argv}aaaaaadasdasdasdasd")
         self.setup_policy()
