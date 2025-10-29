@@ -44,20 +44,15 @@ class TrainP2e(TrainBase):
     policy_parent_module_str = "robo_manip_baselines.policy"
     def __init__(self):
         
-        print("はじめ")
-        print(sys.argv)
         self.stash = [sys.argv[sys.argv.index("--checkpoint")], sys.argv[sys.argv.index("--checkpoint")+1]]
         del sys.argv[sys.argv.index("--checkpoint")+1]
         del sys.argv[sys.argv.index("--checkpoint")]
         super().__init__()
-        print("こん")
-        #print("aa")
-        #print(f"{sys.argv}aaaaaadasdasdasdasd")
+        
         self.setup_policy()
-        #print(f"]]]]]]]]]]]]]]{sys.argv}")
-        #print("aaaaa")
+        
         self.setup_env()
-        #print(f"@@@@@@@@@@@@@@{sys.argv}")
+        
         
         
     def setup_env(self):

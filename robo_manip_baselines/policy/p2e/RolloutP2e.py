@@ -6,26 +6,55 @@ import os
 from robo_manip_baselines.common import RolloutBase, denormalize_data, normalize_data
 import sys
 from .P2ePolicy import P2ePolicy
+import importlib
+from torch.utils.tensorboard import SummaryWriter
 
+import yaml
+import types
+from attrdict import AttrDict
+
+from pathlib import Path
+
+
+spec = importlib.util.spec_from_file_location(
+    "Plan2Explore",
+    "../third_party/SimpleDreamer/dreamer/algorithms/plan2explore.py"
+)
+plan2explore = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(plan2explore)
+Plan2Explore = plan2explore.Plan2Explore
+
+def load_config(config_path: str) -> AttrDict:
+    with open(config_path) as f:
+        config = yaml.load(f, Loader=yaml.FullLoader)
+    return AttrDict(config)
 
 class RolloutP2e(RolloutBase):
     def setup_policy(self):
         print(f"RolloutP2e {sys.argv}")
+        #self.args.
         # Print policy information
         self.print_policy_info()
         print(
             f"  - obs steps: {self.model_meta_info['data']['n_obs_steps']}, action steps: {self.model_meta_info['data']['n_action_steps']}"
         )
 
-        # Construct policy
-        self.policy = P2ePolicy(
-            self.state_dim,
-            self.action_dim,
-            len(self.camera_names),
-            **self.model_meta_info["policy"]["args"],
+        #define P2E
+        self.config = load_config("../third_party/SimpleDreamer/dreamer/configs/p2e-dmc-walker-walk.yml")
+        self.p2e = Plan2Explore(
+            observation_shape=(3, 480, 640),
+            discrete_action_bool=False,
+            action_size=7,
+            writer=SummaryWriter(log_dir="/tmp"),
+            device="cuda",
+            config=self.config,
         )
 
-        # Load checkpoint
+        self.policy = P2ePolicy(p2e=self.p2e)
+
+        print(self.policy)
+
+        #load checkpoint
         self.load_ckpt()
 
     def setup_plot(self):
