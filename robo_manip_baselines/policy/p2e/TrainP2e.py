@@ -59,7 +59,7 @@ class TrainP2e(TrainBase):
         #case1
         from robo_manip_baselines.bin.Rollout import RolloutMain
         
-        print(f"]/]/]/]/]/ {sys.argv}")
+        
         envarg = sys.argv[sys.argv.index("--env")+1]
         sys.argv = [sys.argv[0]] + ["P2e", envarg] + self.stash
         #sys.argv += ["--checkpoint", self.args.checkpoint_dir]
@@ -67,8 +67,7 @@ class TrainP2e(TrainBase):
         # checkpointはreplaybuffer用
         # checkpoint=dirはその他
         self.replay_buffer = RolloutMain()
-        print(f"これをみよ {self.replay_buffer.args}")
-        print(sys.argv)
+        
         self.replay_buffer.args.checkpoint = self.args.checkpoint_dir
         #print("sdasda")
         #print(self.replay_buffer.args)
@@ -77,6 +76,8 @@ class TrainP2e(TrainBase):
 
         self.replay_buffer.args.save_rollout = True
         self.replay_buffer.args.auto_exit = True
+        self.replay_buffer.args.max_duration = 10.0
+        self.replay_buffer.args.ungyo = "oo"
         
 
     def set_additional_args(self, parser):
@@ -84,7 +85,7 @@ class TrainP2e(TrainBase):
         parser.set_defaults(enable_rmb_cache=True)
 
         parser.set_defaults(batch_size=32)
-        parser.set_defaults(num_epochs=40)
+        parser.set_defaults(num_epochs=100)
         parser.set_defaults(lr=1e-5)
 
         
@@ -215,12 +216,13 @@ class TrainP2e(TrainBase):
             
             self.replay_buffer.args.checkpoint = os.path.join(self.args.checkpoint_dir, "dummy")
             
-            replay_buffer_num = 20
+            replay_buffer_num = 30
             if len(os.listdir(rb_path)) >= replay_buffer_num:
                 os.remove(os.path.join(rb_path, os.listdir(rb_path).sort()[:len(os.listdir(rb_path))-replay_buffer_num]))
 
             #collect replay buffer
             print(self.config)
+            
             for iteration in range(self.config.parameters.dreamer.train_iterations):
                 if iteration % self.config.parameters.dreamer.collect_interval == 0:
                     for _ in range(self.config.parameters.dreamer.batch_size):
@@ -228,6 +230,7 @@ class TrainP2e(TrainBase):
                         self.replay_buffer.run() #これはenvironment_interactionを利用する想定。この中でp2eの学習に必要な要素が揃う。
                         #parser.get_parser(), args1 = parser.parse_args(["--save_rollout", "True"])としたいが、よくわからないので便宜上直接代入することとすru
                         print("ここまでは？")
+                        
                     #setup_dataset
                     self.setup_dataset()
                 #dataの型が合わない（done, rewardはともかくnextobservationをどう入れるか）
@@ -237,8 +240,6 @@ class TrainP2e(TrainBase):
                     self.policy.update(data[0], data[1], data[2])
                 
                 
-
-
 
 
 

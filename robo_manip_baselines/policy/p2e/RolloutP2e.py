@@ -31,7 +31,8 @@ def load_config(config_path: str) -> AttrDict:
 
 class RolloutP2e(RolloutBase):
     def setup_policy(self):
-        print(f"RolloutP2e {sys.argv}")
+        print("222222")
+        
         #self.args.
         # Print policy information
         self.print_policy_info()
@@ -52,7 +53,13 @@ class RolloutP2e(RolloutBase):
 
         self.policy = P2ePolicy(p2e=self.p2e)
 
-        print(self.policy)
+        print("&&&&")
+        print(self.args)
+        self.args.save_rollout = True
+        self.args.auto_exit = True
+        self.max_duration = 10.0
+        print(self.args)
+        print("&&&&")
 
         #load checkpoint
         self.load_ckpt()
