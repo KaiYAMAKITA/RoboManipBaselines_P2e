@@ -42,6 +42,18 @@ class TrainP2e(TrainBase):
     DatasetClass = P2eDataset
     operation_parent_module_str = "robo_manip_baselines.envs.operation"
     policy_parent_module_str = "robo_manip_baselines.policy"
+    policy_choices = [
+        "Mlp",
+        "Sarnn",
+        "Act",
+        "MtAct",
+        "DiffusionPolicy",
+        "DiffusionPolicy3d",
+        "CnnMlp",
+        "CnnReservoir",
+        "CnnDwTcn",
+        "P2e"
+    ]
     def __init__(self):
         
         self.stash = [sys.argv[sys.argv.index("--checkpoint")], sys.argv[sys.argv.index("--checkpoint")+1]]
@@ -61,23 +73,16 @@ class TrainP2e(TrainBase):
         
         
         envarg = sys.argv[sys.argv.index("--env")+1]
-        sys.argv = [sys.argv[0]] + ["P2e", envarg] + self.stash
-        #sys.argv += ["--checkpoint", self.args.checkpoint_dir]
-        
-        # checkpointはreplaybuffer用
-        # checkpoint=dirはその他
-        self.replay_buffer = RolloutMain()
-        
-        self.replay_buffer.args.checkpoint = self.args.checkpoint_dir
-        #print("sdasda")
-        #print(self.replay_buffer.args)
-        self.args.dataset_dir = os.path.join(self.args.checkpoint_dir, "replay_buffer")
-        #print(f"sdf{self.args.dataset_dir}")
+        #sys.argv = [sys.argv[0]] + ["P2e", envarg] + self.stash
+        sys.argv = [sys.argv[0]] + self.stash
 
-        self.replay_buffer.args.save_rollout = True
-        self.replay_buffer.args.auto_exit = True
-        self.replay_buffer.args.max_duration = 10.0
-        self.replay_buffer.args.ungyo = "oo"
+        self.setup_rollout()
+        #self.replay_buffer = RolloutMain()
+        print(f"うお{self.args}")
+        self.args.checkpoint = self.args.checkpoint_dir
+
+        
+
         
 
     def set_additional_args(self, parser):
@@ -125,6 +130,10 @@ class TrainP2e(TrainBase):
             default=1,
             help="number of steps in the action sequence to output from the policy",
         )
+        parser.add_argument(
+            "--config", type=str, help="configuration file"
+        )
+
         print("dd")
 
 
@@ -182,8 +191,10 @@ class TrainP2e(TrainBase):
         )
 
     def train_loop(self):
-        rb_path = os.path.join(self.args.checkpoint_dir, "replay_buffer")
-        os.makedirs(rb_path, exist_ok=True)
+        print(self.args.checkpoint_dir)
+        
+        #rb_path = os.path.join(self.args.checkpoint_dir, "replay_buffer")
+        #os.makedirs(rb_path, exist_ok=True)
         for epoch in tqdm(range(self.args.num_epochs)):
             # Run train step
             """a = 0
@@ -214,30 +225,39 @@ class TrainP2e(TrainBase):
                 self.update_best_ckpt(epoch_summary)
             """
             
-            self.replay_buffer.args.checkpoint = os.path.join(self.args.checkpoint_dir, "dummy")
+            #self.replay_buffer.args.checkpoint = os.path.join(self.args.checkpoint_dir, "dummy")
             
             replay_buffer_num = 30
-            if len(os.listdir(rb_path)) >= replay_buffer_num:
-                os.remove(os.path.join(rb_path, os.listdir(rb_path).sort()[:len(os.listdir(rb_path))-replay_buffer_num]))
+            #if len(os.listdir(rb_path)) >= replay_buffer_num:
+            #    os.remove(os.path.join(rb_path, os.listdir(rb_path).sort()[:len(os.listdir(rb_path))-replay_buffer_num]))
 
             #collect replay buffer
-            print(self.config)
             
+            self.args.dataset_dir = None
             for iteration in range(self.config.parameters.dreamer.train_iterations):
+                
                 if iteration % self.config.parameters.dreamer.collect_interval == 0:
-                    for _ in range(self.config.parameters.dreamer.batch_size):
-                        print("ここまで来た。")
-                        self.replay_buffer.run() #これはenvironment_interactionを利用する想定。この中でp2eの学習に必要な要素が揃う。
+                    
+                    #for _ in range(self.config.parameters.dreamer.batch_size):これをすると都度フォルダが作成されるため、レプレイバッファの保存場所が一意に定まらない
+                    print("ここまで来た。")
+                    print(self.args.dataset_dir)
+                    self.run_rollout()
+                    #self.replay_buffer.run() #これはenvironment_interactionを利用する想定。この中でp2eの学習に必要な要素が揃う。
                         #parser.get_parser(), args1 = parser.parse_args(["--save_rollout", "True"])としたいが、よくわからないので便宜上直接代入することとすru
-                        print("ここまでは？")
+                    print("ここまでは？")
                         
                     #setup_dataset
+                    print(self.args.dataset_dir)
+                    if self.args.dataset_dir is None:
+                        self.args.dataset_dir, _ = os.path.split(self.rollout.filename)
                     self.setup_dataset()
+                    print(self.args.dataset_dir)
                 #dataの型が合わない（done, rewardはともかくnextobservationをどう入れるか）
                 #plan2exploreの333行目
                 #rollout-> run -> reward
-                for data in self.train_dataloader:
-                    self.policy.update(data[0], data[1], data[2])
+                #for data in self.train_dataloader:
+                #    self.policy.update(data[0], data[1], data[2])
+            uououo
                 
                 
 
@@ -254,6 +274,97 @@ class TrainP2e(TrainBase):
 
         # Save best checkpoint
         self.save_best_ckpt()
+
+
+
+    def setup_rollout(self):
+        env_utils_spec = importlib.util.spec_from_file_location(
+            "EnvUtils",
+            os.path.join(os.path.dirname(__file__), "../..", "common/utils/EnvUtils.py"),
+        )
+        env_utils_module = importlib.util.module_from_spec(env_utils_spec)
+        env_utils_spec.loader.exec_module(env_utils_module)
+
+        """parser = argparse.ArgumentParser(
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+            description="This is a meta argument parser for the rollout switching between different policies and environments. The actual arguments are handled by another internal argument parser.",
+            fromfile_prefix_chars="@",
+            add_help=False,
+        )
+        parser.add_argument(
+            "policy",
+            type=str,
+            nargs="?",
+            default=None,
+            choices=self.policy_choices,
+            help="policy",
+        )
+        parser.add_argument(
+            "env",
+            type=str,
+            help="environment",
+            nargs="?",
+            default=None,
+            choices=env_utils_module.get_env_names(
+                operation_parent_module_str=self.operation_parent_module_str
+            ),
+        )
+        parser.add_argument("--config", type=str, help="configuration file")
+        parser.add_argument(
+            "-h",
+            "--help",
+            action="store_true",
+            help="Show this help message and continue",
+        )
+
+        self.args, remaining_argv = parser.parse_known_args()
+        sys.argv = [sys.argv[0]] + remaining_argv
+        if self.args.policy is None or self.args.env is None:
+            parser.print_help()
+            sys.exit(1)
+        elif self.args.help:
+            parser.print_help()
+            print("\n================================\n")
+            sys.argv += ["--help"]"""
+        if "Isaac" in self.args.env:
+            from isaacgym import (
+                gymapi,  # noqa: F401
+                gymtorch,  # noqa: F401
+                gymutil,  # noqa: F401
+            )
+
+        # This includes pytorch import, so it must be later than isaac import
+        from robo_manip_baselines.common import camel_to_snake, remove_prefix
+
+        operation_module = importlib.import_module(
+            f"{self.operation_parent_module_str}.Operation{self.args.env}"
+        )
+        OperationEnvClass = getattr(operation_module, f"Operation{self.args.env}")
+
+        policy_module = importlib.import_module(
+            f"{self.policy_parent_module_str}.{camel_to_snake(self.args.policy)}"
+        )
+        RolloutPolicyClass = getattr(policy_module, f"Rollout{self.args.policy}")
+
+        # The order of parent classes must not be changed in order to maintain the method resolution order (MRO)
+        class Rollout(OperationEnvClass, RolloutPolicyClass):
+            @property
+            def policy_name(self):
+                return remove_prefix(RolloutPolicyClass.__name__, "Rollout")
+
+        if self.args.config is None:
+            config = {}
+        else:
+            with open(self.args.config, "r") as f:
+                config = yaml.safe_load(f)
+
+
+        self.rollout = Rollout(**config)
+
+
+    def run_rollout(self):
+        self.rollout.run()
+
 
 if __name__ == "__main__":
     p2e = Plan2Explore()

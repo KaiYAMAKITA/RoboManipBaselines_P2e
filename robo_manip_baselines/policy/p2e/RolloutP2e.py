@@ -8,6 +8,7 @@ import sys
 from .P2ePolicy import P2ePolicy
 import importlib
 from torch.utils.tensorboard import SummaryWriter
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 import yaml
 import types
@@ -29,9 +30,9 @@ def load_config(config_path: str) -> AttrDict:
         config = yaml.load(f, Loader=yaml.FullLoader)
     return AttrDict(config)
 
-class RolloutP2e(RolloutBase):
+class RolloutP2e(RolloutBase): 
+
     def setup_policy(self):
-        print("222222")
         
         #self.args.
         # Print policy information
@@ -41,6 +42,7 @@ class RolloutP2e(RolloutBase):
         )
 
         #define P2E
+
         self.config = load_config("../third_party/SimpleDreamer/dreamer/configs/p2e-dmc-walker-walk.yml")
         self.p2e = Plan2Explore(
             observation_shape=(3, 480, 640),
@@ -53,14 +55,13 @@ class RolloutP2e(RolloutBase):
 
         self.policy = P2ePolicy(p2e=self.p2e)
 
-        print("&&&&")
-        print(self.args)
+        
+        self.args.world_idx_list = [0 for i in range(2)]
         self.args.save_rollout = True
         self.args.auto_exit = True
-        self.max_duration = 10.0
-        print(self.args)
-        print("&&&&")
+        self.args.max_duration = 10.0
 
+        
         #load checkpoint
         self.load_ckpt()
 
@@ -180,3 +181,69 @@ class RolloutP2e(RolloutBase):
             self.policy_name,
             cv2.cvtColor(np.asarray(self.canvas.buffer_rgba()), cv2.COLOR_RGB2BGR),
         )
+
+    def reset(self):
+        if not hasattr(self, "modified_episode_index"):
+            self.modified_episode_index = 0
+        # Reset plot
+        if not self.args.no_plot:
+            for _ax in np.ravel(self.ax):
+                _ax.cla()
+                _ax.axis("off")
+
+            self.canvas = FigureCanvasAgg(self.fig)
+            self.canvas.draw()
+            cv2.imshow(
+                self.policy_name,
+                cv2.cvtColor(np.asarray(self.canvas.buffer_rgba()), cv2.COLOR_RGB2BGR),
+            )
+
+        # Reset motion manager
+        self.motion_manager.reset()
+
+        # Reset data manager
+        self.data_manager.reset()
+
+        # Reset environment
+        self.env.unwrapped.world_random_scale = self.args.world_random_scale
+        
+        
+        if self.data_manager.episode_idx == len(self.args.world_idx_list):
+            self.data_manager.episode_idx = 0
+                
+        world_idx = self.args.world_idx_list[self.data_manager.episode_idx]
+        self.data_manager.setup_env_world(world_idx)
+        self.obs, self.info = self.env.reset(seed=self.args.seed)
+        self.reward = 0
+        msg = f"[{self.__class__.__name__}] Reset environment. demo_name: {self.demo_name}, world_idx: {self.data_manager.world_idx}, episode_idx: {self.data_manager.episode_idx}"
+        if self.require_task_desc:
+            msg += f", task desc: {self.args.task_desc}"
+        
+        self.modified_episode_index += 1
+
+        # Reset phase manager
+        self.phase_manager.reset()
+
+        # Reset variables
+        self.reset_variables()
+
+    def get_data_filename(self):
+        
+        if not hasattr(self, "filename"):
+            self.filename = None
+
+        if self.filename is None:
+            
+            self.filename = super().get_data_filename()
+            
+        else:
+            dirname = os.path.dirname(self.filename)
+            #self.filename = os.path.join(
+            #    dirname,
+            #    f"{self.demo_name}_world{self.data_manager.world_idx:0>1}_{self.data_manager.episode_idx:0>3}.rmb",
+            #)
+            self.filename = os.path.join(
+                dirname,
+                f"{self.demo_name}_world{self.data_manager.world_idx:0>1}_{self.modified_episode_index:0>3}.rmb",
+            )
+        return self.filename
