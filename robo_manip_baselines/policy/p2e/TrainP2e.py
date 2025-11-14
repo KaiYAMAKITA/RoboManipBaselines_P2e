@@ -1,21 +1,27 @@
 import torch
 from torch.nn import functional as F
 from torch.utils.tensorboard import SummaryWriter
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 import argparse
 from robo_manip_baselines.common import TrainBase
 import importlib
 import os
+import numpy as np
 
 
 try:
     from .P2eDataset import P2eDataset
     from .P2ePolicy import P2ePolicy
     from .RolloutP2e import RolloutP2e
+    from ..data.CachedDataset import CachedDataset
+    from ..utils.FileUtils import find_rmb_files
 except:
     from robo_manip_baselines.policy.p2e.P2eDataset import P2eDataset
     from robo_manip_baselines.policy.p2e.P2ePolicy import P2ePolicy
     from robo_manip_baselines.policy.p2e.RolloutP2e import RolloutP2e
+    from robo_manip_baselines.common.data.CachedDataset import CachedDataset
+    from robo_manip_baselines.common.utils.FileUtils import find_rmb_files
 
 import sys, os
 repo_root = "../third_party/SimpleDreamer"
@@ -78,7 +84,6 @@ class TrainP2e(TrainBase):
 
         self.setup_rollout()
         #self.replay_buffer = RolloutMain()
-        print(f"うお{self.args}")
         self.args.checkpoint = self.args.checkpoint_dir
 
         
@@ -86,7 +91,6 @@ class TrainP2e(TrainBase):
         
 
     def set_additional_args(self, parser):
-        print("aaaaaaaっs")
         parser.set_defaults(enable_rmb_cache=True)
 
         parser.set_defaults(batch_size=32)
@@ -133,8 +137,6 @@ class TrainP2e(TrainBase):
         parser.add_argument(
             "--config", type=str, help="configuration file"
         )
-
-        print("dd")
 
 
     def setup_model_meta_info(self):
@@ -191,10 +193,11 @@ class TrainP2e(TrainBase):
         )
 
     def train_loop(self):
-        print(self.args.checkpoint_dir)
         
         #rb_path = os.path.join(self.args.checkpoint_dir, "replay_buffer")
         #os.makedirs(rb_path, exist_ok=True)
+        self.args.dataset_dir = None
+        self.environment_interaction()
         for epoch in tqdm(range(self.args.num_epochs)):
             # Run train step
             """a = 0
@@ -232,32 +235,18 @@ class TrainP2e(TrainBase):
             #    os.remove(os.path.join(rb_path, os.listdir(rb_path).sort()[:len(os.listdir(rb_path))-replay_buffer_num]))
 
             #collect replay buffer
-            
-            self.args.dataset_dir = None
-            for iteration in range(self.config.parameters.dreamer.train_iterations):
+            for iteration in range(self.config.parameters.dreamer.collect_interval):
+                for data in self.train_dataloader:
+                    print("aa")
+                data = self.make_data() #rmbからp2eに使える形にデータ変換を行う
+                posterior, deterministics = self.policy.dynamic_learning(data)
+                self.policy.p2e.behaviour_learning(
+
+                )
+
                 
-                if iteration % self.config.parameters.dreamer.collect_interval == 0:
-                    
-                    #for _ in range(self.config.parameters.dreamer.batch_size):これをすると都度フォルダが作成されるため、レプレイバッファの保存場所が一意に定まらない
-                    print("ここまで来た。")
-                    print(self.args.dataset_dir)
-                    self.run_rollout()
-                    #self.replay_buffer.run() #これはenvironment_interactionを利用する想定。この中でp2eの学習に必要な要素が揃う。
-                        #parser.get_parser(), args1 = parser.parse_args(["--save_rollout", "True"])としたいが、よくわからないので便宜上直接代入することとすru
-                    print("ここまでは？")
-                        
-                    #setup_dataset
-                    print(self.args.dataset_dir)
-                    if self.args.dataset_dir is None:
-                        self.args.dataset_dir, _ = os.path.split(self.rollout.filename)
-                    self.setup_dataset()
-                    print(self.args.dataset_dir)
-                #dataの型が合わない（done, rewardはともかくnextobservationをどう入れるか）
-                #plan2exploreの333行目
-                #rollout-> run -> reward
-                #for data in self.train_dataloader:
-                #    self.policy.update(data[0], data[1], data[2])
-            uououo
+
+            self.environment_interaction()
                 
                 
 
@@ -276,6 +265,8 @@ class TrainP2e(TrainBase):
         self.save_best_ckpt()
 
 
+    def make_data():
+        pass
 
     def setup_rollout(self):
         env_utils_spec = importlib.util.spec_from_file_location(
@@ -364,6 +355,68 @@ class TrainP2e(TrainBase):
 
     def run_rollout(self):
         self.rollout.run()
+    
+    def environment_interaction(self):
+        self.run_rollout()
+        print("rollout finished")
+        print(self.args.dataset_dir)
+        if self.args.dataset_dir is None:
+            self.args.dataset_dir, _ = os.path.split(self.rollout.filename)
+        print(self.args.dataset_dir)
+        self.all_filenames = find_rmb_files(self.args.dataset_dir, num_files=self.args.num_data)
+        #このデータセット作成の部分でrmbのデータをp2e用に変換する
+        self.setup_dataset()
+
+
+    def setup_dataset(self):
+        if self.args.enable_rmb_cache and self.args.use_cached_dataset:
+            raise ValueError(
+                f"[{self.__class__.__name__}] Both 'enable_rmb_cache' and 'use_cached_dataset' options cannot be True at the same time."
+            )
+
+        # Get file list
+        num_files = len(self.all_filenames)
+        train_num = max(int(np.clip(self.args.train_ratio, 0.0, 1.0) * num_files), 1)
+        if self.args.val_ratio is None:
+            val_num = max(num_files - train_num, 1)
+        else:
+            val_num = max(int(np.clip(self.args.val_ratio, 0.0, 1.0) * num_files), 1)
+        train_filenames = self.all_filenames[:train_num]
+        val_filenames = self.all_filenames[-1 * val_num :]
+
+        # Set data stats
+        self.set_data_stats()
+        print("ohha")
+
+        # Make dataloader
+        self.train_dataloader = self.make_dataloader(train_filenames, shuffle=True)
+        self.val_dataloader = self.make_dataloader(val_filenames, shuffle=False)
+
+        # Setup tensorboard
+        #print(f"a {self.args.checkpoint}")
+        self.writer = SummaryWriter(self.args.checkpoint_dir)
+
+        # Print dataset information
+        self.print_dataset_info()
+
+    def make_dataloader(self, filenames, shuffle=True):
+        dataset = self.DatasetClass(
+            filenames, self.model_meta_info, self.args.enable_rmb_cache
+        )
+        if self.args.use_cached_dataset:
+            dataset = CachedDataset(dataset)
+
+        dataloader = DataLoader(
+            dataset,
+            batch_size=self.args.batch_size,
+            shuffle=shuffle,
+            pin_memory=True,
+            num_workers=self.args.num_workers,
+            persistent_workers=True,
+            prefetch_factor=4,
+        )
+
+        return dataloader
 
 
 if __name__ == "__main__":
