@@ -15,7 +15,7 @@ import types
 from attrdict import AttrDict
 
 from pathlib import Path
-
+import torch.nn.functional as F
 
 spec = importlib.util.spec_from_file_location(
     "Plan2Explore",
@@ -45,7 +45,7 @@ class RolloutP2e(RolloutBase):
 
         self.config = load_config("../third_party/SimpleDreamer/dreamer/configs/p2e-dmc-walker-walk.yml")
         self.p2e = Plan2Explore(
-            observation_shape=(3, 480, 640),
+            observation_shape=(3, 64, 64),
             discrete_action_bool=False,
             action_size=7,
             writer=SummaryWriter(log_dir="/tmp"),
@@ -63,7 +63,8 @@ class RolloutP2e(RolloutBase):
 
         
         #load checkpoint
-        self.load_ckpt()
+        #self.load_ckpt()
+        self.device = torch.device("cuda")
 
     def setup_plot(self):
         fig_ax = plt.subplots(
@@ -113,18 +114,46 @@ class RolloutP2e(RolloutBase):
 
     def get_images(self):
         # Get latest value
-        images = []
-        for camera_name in self.camera_names:
+
+
+        assert len(self.camera_names) == 1
+
+        image = self.info["rgb_images"][self.camera_names[0]]
+        print(f"image shape: {image.shape}")
+
+
+        # --- ① 横を480に中央クロップ ---
+        H, W, C = image.shape
+        target_w = 480
+        left = (W - target_w) // 2
+        right = left + target_w
+        image_crop = image[:, left:right, :]     # shape: (480, 480, 3)
+
+        # --- ② cv2 で 64×64 にリサイズ ---
+        image = cv2.resize(
+            image_crop,
+            (64, 64),           # (width, height)
+            interpolation=cv2.INTER_AREA
+        )
+
+
+
+        image = np.moveaxis(image, -1, -3).copy()
+        print(f"image shape after moveaxis: {image.shape}")
+        image = torch.tensor(image, dtype=torch.uint8)
+        image = self.image_transforms(image)[torch.newaxis].to(self.device)
+        print(f"image shape after transform: {image.shape}")
+        """for camera_name in self.camera_names:
             image = self.info["rgb_images"][camera_name]
 
             image = np.moveaxis(image, -1, -3)
             image = torch.tensor(image.copy(), dtype=torch.uint8)
-            image = self.image_transforms(image)
+            image = self.image_transforms(image)[torch.newaxis].to(self.device)
 
             images.append(image)
-
+"""
         # Store and return
-        if self.images_buf is None:
+        """if self.images_buf is None:
             self.images_buf = [
                 [image for _ in range(self.model_meta_info["data"]["n_obs_steps"])]
                 for image in images
@@ -133,32 +162,50 @@ class RolloutP2e(RolloutBase):
             for single_images_buf, image in zip(self.images_buf, images):
                 single_images_buf.pop(0)
                 single_images_buf.append(image)
-
-        images = torch.stack(
+"""
+        """images = torch.stack(
             [
                 torch.stack(single_images_buf, dim=0)[torch.newaxis].to(self.device)
                 for single_images_buf in self.images_buf
             ]
-        )
+        )"""
+        
 
-        return images
+
+
+        return image
 
     def infer_policy(self):
         # Infer
-        if self.policy_action_buf is None or len(self.policy_action_buf) == 0:
-            state = self.get_state()
-            images = self.get_images()
+        #if self.policy_action_buf is None or len(self.policy_action_buf) == 0:
+        #stagte = self.get_state()
+        image = self.get_images()
+        #何も考えず一旦ここをP2E仕様にする
+        #action = self.policy(state, images)[0] #バッチサイズ１のバッチのうち一つ
 
-            #何も考えず一旦ここをP2E仕様にする
-            action = self.policy(state, images)[0]
-            self.policy_action_buf = list(
-                action.cpu().detach().numpy().astype(np.float64)
-            )
+        print(f"info {self.info.keys()}")
+        print(self.info["rgb_images"]["front"].shape)
+        # environment interaction
+
+        
+        
+        embedded_observation = self.policy.p2e.encoder(image)
+        self.deterministic = self.policy.p2e.rssm.recurrent_model(
+            self.posterior, self.action, self.deterministic
+        )
+        embedded_observation = embedded_observation.reshape(1, -1)
+        _, self.posterior = self.policy.p2e.rssm.representation_model(
+            embedded_observation, self.deterministic
+        )
+        self.action = self.policy.p2e.intrinsic_actor(self.posterior, self.deterministic).detach()
+        ###
 
         # Store action
         self.policy_action = denormalize_data(
-            self.policy_action_buf.pop(0), self.model_meta_info["action"]
+            self.action[0].cpu().detach().numpy().astype(np.float64), self.model_meta_info["action"]
         )
+        print(f"self.policy_action: {self.policy_action.shape}")
+        print(f"self.policy_action_list: {self.policy_action_list.shape}")
         self.policy_action_list = np.concatenate(
             [self.policy_action_list, self.policy_action[np.newaxis]]
         )
@@ -182,7 +229,7 @@ class RolloutP2e(RolloutBase):
             cv2.cvtColor(np.asarray(self.canvas.buffer_rgba()), cv2.COLOR_RGB2BGR),
         )
 
-    def reset(self):
+    """def reset(self):
         if not hasattr(self, "modified_episode_index"):
             self.modified_episode_index = 0
         # Reset plot
@@ -225,7 +272,7 @@ class RolloutP2e(RolloutBase):
         self.phase_manager.reset()
 
         # Reset variables
-        self.reset_variables()
+        self.reset_variables()"""
 
     def get_data_filename(self):
         
@@ -247,3 +294,60 @@ class RolloutP2e(RolloutBase):
                 f"{self.demo_name}_world{self.data_manager.world_idx:0>1}_{self.modified_episode_index:0>3}.rmb",
             )
         return self.filename
+    
+    def run(self):
+        self.reset_flag = True
+        self.quit_flag = False
+        self.inference_duration_list = []
+
+        
+        while True:
+            if self.reset_flag:
+                self.reset()
+                self.reset_flag = False
+
+            self.phase_manager.pre_update()
+
+            env_action = np.concatenate(
+                [
+                    self.motion_manager.get_command_data(key)
+                    for key in self.env.unwrapped.command_keys_for_step
+                ]
+            )
+            
+            if self.args.save_rollout and self.phase_manager.is_phase("RolloutPhase"):
+                self.record_data()
+
+            self.obs, self.reward, _, _, self.info = self.env.step(env_action)
+
+            self.phase_manager.post_update()
+
+            self.key = cv2.waitKey(1)
+            self.phase_manager.check_transition()
+
+            if self.key == 27:  # escape key
+                self.quit_flag = True
+            if self.quit_flag:
+                break
+            
+        
+        if self.args.result_filename is not None:
+            print(
+                f"[{self.__class__.__name__}] Save the rollout results: {self.args.result_filename}"
+            )
+            with open(self.args.result_filename, "w") as result_file:
+                yaml.dump(self.result, result_file)
+
+        self.print_statistics()
+
+    def reset_variables(self):
+        super().reset_variables()
+
+        #enviroment interaction
+        self.posterior, self.deterministic = self.policy.p2e.rssm.recurrent_model_input_init(1)
+        self.action = torch.zeros(1, self.policy.p2e.action_size).to(self.device)
+
+        self.score = 0
+        self.score_lst = np.array([])
+        self.done = False
+        ###

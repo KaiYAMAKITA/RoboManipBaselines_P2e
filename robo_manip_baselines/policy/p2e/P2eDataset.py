@@ -1,107 +1,206 @@
 import numpy as np
 import torch
+from attrdict import AttrDict
 
 from robo_manip_baselines.common import (
     DataKey,
-    DatasetBase,
     RmbData,
     get_skipped_data_seq,
 )
 
+@torch.no_grad()
+def build_p2e_attrdict_dataset(
+    filenames,
+    model_meta_info,
+    enable_rmb_cache: bool = False,
+    device: torch.device | str = "cpu",
+):
+    """
+    戻り値: AttrDict({
+        'state':  FloatTensor [N, L, state_dim],
+        'action': FloatTensor [N, L, action_dim],
+        'images': UInt8Tensor [N, L, N_cam, H, W, 3],
+    })
+    ※ 各エピソードの長さが異なる場合は、最後のフレームをリピートして L(=max長) に揃えます。
+    """
+    skip = model_meta_info["data"]["skip"]
 
-class P2eDataset(DatasetBase):
-    """Dataset to train MLP policy."""
+    state_keys  = model_meta_info.get("state", {}).get("keys", [])
+    action_keys = model_meta_info.get("action", {}).get("keys", [])
+    cam_names   = model_meta_info.get("image", {}).get("camera_names", [])
+    reward_keys = ["reward"]
+    rwd_exist = False
 
-    def setup_variables(self):
-        skip = self.model_meta_info["data"]["skip"]
+    per_epi_state = []
+    per_epi_action = []
+    per_epi_images = []
+    per_epi_reward = []
+    lengths = []
 
-        self.chunk_info_list = []
-        print(f"filenames: {self.filenames}")
-        for episode_idx, filename in enumerate(self.filenames):
-            print(episode_idx)
-            with RmbData(filename) as rmb_data:
-                episode_len = rmb_data[DataKey.TIME][::skip].shape[0]
-                for start_time_idx in range(0, episode_len):
-                    self.chunk_info_list.append((episode_idx, start_time_idx))
-                print(f"{len(self.chunk_info_list)} chunks loaded.")
+    # 1) エピソードごとに [T_i, ...] を作る
+    for fname in filenames:
+        with RmbData(fname, enable_rmb_cache) as rmb:
+            print(f"Loading episode from {fname}...")
+            print("reards" if "reward" in rmb.keys() else "None")
+            T = rmb[DataKey.TIME][::skip].shape[0]
+            lengths.append(T)
 
-    def __len__(self):
-        return len(self.chunk_info_list)
-
-    def __getitem__(self, chunk_idx):
-        skip = self.model_meta_info["data"]["skip"]
-        n_obs_steps = self.model_meta_info["data"]["n_obs_steps"]
-        n_action_steps = self.model_meta_info["data"]["n_action_steps"]
-        episode_idx, start_time_idx = self.chunk_info_list[chunk_idx]
-
-        with RmbData(self.filenames[episode_idx], self.enable_rmb_cache) as rmb_data:
-            episode_len = rmb_data[DataKey.TIME][::skip].shape[0]
-            obs_time_idxes = np.clip(
-                np.arange(start_time_idx - n_obs_steps + 1, start_time_idx + 1),
-                0,
-                episode_len - 1,
-            )
-            action_time_idxes = np.clip(
-                np.arange(start_time_idx, start_time_idx + n_action_steps),
-                0,
-                episode_len - 1,
-            )
-
-            # Load state
-            if len(self.model_meta_info["state"]["keys"]) == 0:
-                state = np.zeros(0, dtype=np.float64)
+            # --- state [T, Ds] ---
+            if len(state_keys) == 0:
+                state_np = np.zeros((T, 0), dtype=np.float32)
             else:
-                state = np.concatenate(
-                    [
-                        get_skipped_data_seq(rmb_data[key][:], key, skip)[
-                            obs_time_idxes
-                        ]
-                        for key in self.model_meta_info["state"]["keys"]
-                    ],
+                state_np = np.concatenate(
+                    [get_skipped_data_seq(rmb[key][:], key, skip)[:T] for key in state_keys],
                     axis=1,
-                )
+                ).astype(np.float32)
 
-            # Load action
-            action = np.concatenate(
-                [
-                    get_skipped_data_seq(rmb_data[key][:], key, skip)[action_time_idxes]
-                    for key in self.model_meta_info["action"]["keys"]
-                ],
-                axis=1,
+            # --- action [T, Da] ---
+            if len(action_keys) == 0:
+                action_np = np.zeros((T, 0), dtype=np.float32)
+            else:
+                action_np = np.concatenate(
+                    [get_skipped_data_seq(rmb[key][:], key, skip)[:T] for key in action_keys],
+                    axis=1,
+                ).astype(np.float32)
+
+            # --- images [T, N_cam, H, W, 3] ---
+            if len(cam_names) == 0:
+                images_np = None
+            else:
+                cam_stacks = [
+                    rmb[DataKey.get_rgb_image_key(cam)][::skip][:T]  # [T, H, W, 3] (uint8)
+                    for cam in cam_names
+                ]
+                images_np = np.stack(cam_stacks, axis=0).transpose(1, 0, 2, 3, 4).astype(np.uint8)
+
+            
+            # --- reward [T, 1] ---
+            if reward_keys[0] in rmb.keys():
+              rwd_exist = True
+              if len(reward_keys) == 0:
+                  reward_np = None
+              else:
+                  reward_np = np.concatenate(
+                      [get_skipped_data_seq(rmb[key][:], key, skip)[:T, None] for key in reward_keys],
+                  ).astype(np.float32)
+         
+            per_epi_state.append(state_np)
+            per_epi_action.append(action_np)
+            per_epi_images.append(images_np)
+            if reward_keys[0] in rmb.keys():
+              per_epi_reward.append(reward_np)
+
+
+    # 2) L を決定（最大長）
+    L = max(lengths) if len(lengths) > 0 else 0
+    N = len(filenames)
+
+    # 3) 時間長を L にパディング（不足分は最後のフレームをリピート）
+    def pad_to_L_edge(x, L):
+        if x is None:
+            return None
+        T = x.shape[0]
+        if T == L:
+            return x
+        if T == 0:
+            # ありえないが安全策（edgeパディングできないため0埋め）
+            out_shape = (L,) + x.shape[1:]
+            return np.zeros(out_shape, dtype=x.dtype)
+        pad_width = [(0, L - T)] + [(0, 0)] * (x.ndim - 1)
+        # 'edge' で末尾フレームを繰り返す
+        return np.pad(x, pad_width=pad_width, mode='edge')
+
+    per_epi_state = [pad_to_L_edge(x, L) for x in per_epi_state]
+    per_epi_action = [pad_to_L_edge(x, L) for x in per_epi_action]
+    if rwd_exist:
+      per_epi_reward = [pad_to_L_edge(x, L) for x in per_epi_reward]
+    if any(img is not None for img in per_epi_images):
+        # 画像が1つでもあるなら None のエピソードは空画像で用意（通常は起きない想定）
+        first_img = next(img for img in per_epi_images if img is not None)
+        N_cam, H, W = first_img.shape[1], first_img.shape[2], first_img.shape[3]
+        per_epi_images = [
+            pad_to_L_edge(
+                (img if img is not None else np.zeros((0, N_cam, H, W, 3), dtype=np.uint8)),
+                L
             )
+            for img in per_epi_images
+        ]
+    else:
+        per_epi_images = [None] * N
 
-            # Load images
-            images = np.stack(
-                [
-                    rmb_data[DataKey.get_rgb_image_key(camera_name)][::skip][
-                        obs_time_idxes
-                    ]
-                    for camera_name in self.model_meta_info["image"]["camera_names"]
-                ],
-                axis=0,
-            )
-            print(f"sarnsssd{rmb_data['reward']}")
+    # 4) [N, L, ...] にスタック
+    # state/action
+    if len(per_epi_state) > 0:
+        state_dim = per_epi_state[0].shape[1]
+        state = torch.from_numpy(np.stack(per_epi_state, axis=0)) if state_dim > 0 else torch.empty((N, L, 0), dtype=torch.float32)
+    else:
+        state = torch.empty((0, 0, 0), dtype=torch.float32)
 
-        # Pre-convert data
-        state, action, images = self.pre_convert_data(state, action, images)
+    if len(per_epi_action) > 0:
+        action_dim = per_epi_action[0].shape[1]
+        action = torch.from_numpy(np.stack(per_epi_action, axis=0)) if action_dim > 0 else torch.empty((N, L, 0), dtype=torch.float32)
+    else:
+        action = torch.empty((0, 0, 0), dtype=torch.float32)
 
-        # Convert to tensor
-        state_tensor = torch.tensor(state, dtype=torch.float32)
-        action_tensor = torch.tensor(action, dtype=torch.float32)
-        images_tensor = torch.tensor(images, dtype=torch.uint8)
-        print(state_tensor.shape, action_tensor.shape, images_tensor.shape)
+    # images
+    if len(cam_names) == 0:
+        images = torch.empty((N, L, 0, 0, 0, 0), dtype=torch.uint8)
+    else:
+        images = torch.from_numpy(np.stack(per_epi_images, axis=0))  # [N, L, N_cam, H, W, 3]
+    
+    # reward
+    if rwd_exist:
+      if len(per_epi_reward) > 0:
+          reward_dim = per_epi_reward[0].shape[1]
+          reward = torch.from_numpy(np.stack(per_epi_reward, axis=0)) if reward_dim > 0 else torch.empty((N, L, 0), dtype=torch.float32)
+      else:
+          reward = torch.empty((0, 0, 0), dtype=torch.float32)
 
-        # Augment data
-        state_tensor, action_tensor, images_tensor = self.augment_data(
-            state_tensor, action_tensor, images_tensor
-        )
+    # 5) デバイス・dtype
+    state  = state.to(dtype=torch.float32, device=device)
+    action = action.to(dtype=torch.float32, device=device)
+    images = images.to(device=device)  # 画像はuint8のまま
+    if rwd_exist:
+      reward = reward.to(dtype=torch.float32, device=device)
 
-        # Sort in the order of policy inputs and outputs
-        return state_tensor, images_tensor, action_tensor
+    print("states")
+    print(state.shape)
+    print("actions")
+    print(action.shape)
+    print("images")
+    print(images.shape)
+    if rwd_exist : #ここで上3つとデータ数で差が出ていたらrewardがきちんと記録されているかどうかを確認
+      print("rewards")
+      print(reward.shape)
 
+    state = state[:, :L-1, :]
+    action = action[:, :L-1, :]
+    observation = images[:, :L-1, :, :, :, :]
+    next_observation = images[:, 1:, :, :, :, :]
+    if rwd_exist:
+      reward = reward[:, :L-1, :]
+    done = torch.zeros_like(reward, dtype=torch.float32)
 
+    """
+    return AttrDict(
+        state=state,    # [N, L, Ds]
+        action=action,  # [N, L, Da]
+        images=images,  # [N, L, C, H, W, 3]
+        reward=reward if rwd_exist else None,  # [N, L, 1]
+    )"""
+    if rwd_exist:
+      return AttrDict(
+        observation=observation,  # [N, L, C, H, W, 3]
+        action=action,  # [N, L, Da]
+        reward=reward,  # [N, L, 1]
+        next_observation=next_observation,  # [N, L, C, H, W, 3]
+        done=done,  # [N, L, 1]
+      )
+    
+    return AttrDict(
+        observation=observation,  # [N, L, C, H, W, 3]
+        action=action,  # [N, L, Da]
+        next_observation=next_observation,  # [N, L, C, H, W, 3]
+        done=done,  # [N, L, 1]
+    )
 
-
-
-
-## rewardをrmbデータから取得したいが、方法がわからない
