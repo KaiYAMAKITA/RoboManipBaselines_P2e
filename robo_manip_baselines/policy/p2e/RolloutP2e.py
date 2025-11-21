@@ -56,11 +56,12 @@ class RolloutP2e(RolloutBase):
         self.policy = P2ePolicy(p2e=self.p2e)
 
         
-        self.args.world_idx_list = [0 for i in range(2)]
+        self.args.world_idx_list = [0 for i in range(5)]
         self.args.save_rollout = True
         self.args.auto_exit = True
         self.args.max_duration = 10.0
-
+        self.args.no_render = True
+        
         
         #load checkpoint
         #self.load_ckpt()
@@ -119,7 +120,6 @@ class RolloutP2e(RolloutBase):
         assert len(self.camera_names) == 1
 
         image = self.info["rgb_images"][self.camera_names[0]]
-        print(f"image shape: {image.shape}")
 
 
         # --- ① 横を480に中央クロップ ---
@@ -139,10 +139,8 @@ class RolloutP2e(RolloutBase):
 
 
         image = np.moveaxis(image, -1, -3).copy()
-        print(f"image shape after moveaxis: {image.shape}")
         image = torch.tensor(image, dtype=torch.uint8)
         image = self.image_transforms(image)[torch.newaxis].to(self.device)
-        print(f"image shape after transform: {image.shape}")
         """for camera_name in self.camera_names:
             image = self.info["rgb_images"][camera_name]
 
@@ -182,9 +180,6 @@ class RolloutP2e(RolloutBase):
         image = self.get_images()
         #何も考えず一旦ここをP2E仕様にする
         #action = self.policy(state, images)[0] #バッチサイズ１のバッチのうち一つ
-
-        print(f"info {self.info.keys()}")
-        print(self.info["rgb_images"]["front"].shape)
         # environment interaction
 
         
@@ -204,8 +199,7 @@ class RolloutP2e(RolloutBase):
         self.policy_action = denormalize_data(
             self.action[0].cpu().detach().numpy().astype(np.float64), self.model_meta_info["action"]
         )
-        print(f"self.policy_action: {self.policy_action.shape}")
-        print(f"self.policy_action_list: {self.policy_action_list.shape}")
+
         self.policy_action_list = np.concatenate(
             [self.policy_action_list, self.policy_action[np.newaxis]]
         )
@@ -229,50 +223,6 @@ class RolloutP2e(RolloutBase):
             cv2.cvtColor(np.asarray(self.canvas.buffer_rgba()), cv2.COLOR_RGB2BGR),
         )
 
-    """def reset(self):
-        if not hasattr(self, "modified_episode_index"):
-            self.modified_episode_index = 0
-        # Reset plot
-        if not self.args.no_plot:
-            for _ax in np.ravel(self.ax):
-                _ax.cla()
-                _ax.axis("off")
-
-            self.canvas = FigureCanvasAgg(self.fig)
-            self.canvas.draw()
-            cv2.imshow(
-                self.policy_name,
-                cv2.cvtColor(np.asarray(self.canvas.buffer_rgba()), cv2.COLOR_RGB2BGR),
-            )
-
-        # Reset motion manager
-        self.motion_manager.reset()
-
-        # Reset data manager
-        self.data_manager.reset()
-
-        # Reset environment
-        self.env.unwrapped.world_random_scale = self.args.world_random_scale
-        
-        
-        if self.data_manager.episode_idx == len(self.args.world_idx_list):
-            self.data_manager.episode_idx = 0
-                
-        world_idx = self.args.world_idx_list[self.data_manager.episode_idx]
-        self.data_manager.setup_env_world(world_idx)
-        self.obs, self.info = self.env.reset(seed=self.args.seed)
-        self.reward = 0
-        msg = f"[{self.__class__.__name__}] Reset environment. demo_name: {self.demo_name}, world_idx: {self.data_manager.world_idx}, episode_idx: {self.data_manager.episode_idx}"
-        if self.require_task_desc:
-            msg += f", task desc: {self.args.task_desc}"
-        
-        self.modified_episode_index += 1
-
-        # Reset phase manager
-        self.phase_manager.reset()
-
-        # Reset variables
-        self.reset_variables()"""
 
     def get_data_filename(self):
         
@@ -280,7 +230,7 @@ class RolloutP2e(RolloutBase):
             self.filename = None
 
         if self.filename is None:
-            
+            self.modified_episode_index = 0
             self.filename = super().get_data_filename()
             
         else:
@@ -289,17 +239,19 @@ class RolloutP2e(RolloutBase):
             #    dirname,
             #    f"{self.demo_name}_world{self.data_manager.world_idx:0>1}_{self.data_manager.episode_idx:0>3}.rmb",
             #)
+            self.modified_episode_index += 1
             self.filename = os.path.join(
                 dirname,
-                f"{self.demo_name}_world{self.data_manager.world_idx:0>1}_{self.modified_episode_index:0>3}.rmb",
+                f"{self.demo_name}_world{self.data_manager.world_idx:0>1}_{self.modified_episode_index:0>5}.rmb",
             )
         return self.filename
     
     def run(self):
+        
         self.reset_flag = True
         self.quit_flag = False
         self.inference_duration_list = []
-
+        self.data_manager.episode_idx = 0
         
         while True:
             if self.reset_flag:
@@ -332,9 +284,9 @@ class RolloutP2e(RolloutBase):
             
         
         if self.args.result_filename is not None:
-            print(
-                f"[{self.__class__.__name__}] Save the rollout results: {self.args.result_filename}"
-            )
+            #print(
+            #    f"[{self.__class__.__name__}] Save the rollout results: {self.args.result_filename}"
+            #)
             with open(self.args.result_filename, "w") as result_file:
                 yaml.dump(self.result, result_file)
 

@@ -61,6 +61,7 @@ class TrainP2e(TrainBase):
         "CnnDwTcn",
         "P2e"
     ]
+    max_buffer_num = 15
     def __init__(self):
         
         self.stash = [sys.argv[sys.argv.index("--checkpoint")], sys.argv[sys.argv.index("--checkpoint")+1]]
@@ -82,6 +83,7 @@ class TrainP2e(TrainBase):
         envarg = sys.argv[sys.argv.index("--env")+1]
         #sys.argv = [sys.argv[0]] + ["P2e", envarg] + self.stash
         sys.argv = [sys.argv[0]] + self.stash
+        sys.argv += ["--no_render", "--no_plot"]
 
         self.setup_rollout()
         #self.replay_buffer = RolloutMain()
@@ -157,9 +159,7 @@ class TrainP2e(TrainBase):
 
         #define P2E
         self.config = load_config("../third_party/SimpleDreamer/dreamer/configs/p2e-dmc-walker-walk.yml")
-        print("checkpoint dir", self.args.checkpoint_dir)
         self.config.operation.log_dir = self.args.checkpoint_dir
-        print("uhhosu", self.config.operation.log_dir)
         self.p2e = Plan2Explore(
             observation_shape=(3, 64, 64),
             discrete_action_bool=False,
@@ -173,25 +173,6 @@ class TrainP2e(TrainBase):
         self.policy = P2ePolicy(p2e=self.p2e)
         self.policy.p2e.save(epoch=0)
 
-        """
-        # Construct policy
-        self.policy = P2ePolicy(
-            len(self.model_meta_info["state"]["example"]),
-            len(self.model_meta_info["action"]["example"]),
-            len(self.args.camera_names),
-            **self.model_meta_info["policy"]["args"],
-        )"""
-        #self.policy.cuda()
-
-        """
-        # Construct optimizer
-        self.optimizer = torch.optim.AdamW(
-            self.policy.parameters(),
-            lr=self.args.lr,
-            weight_decay=self.args.weight_decay,
-        )
-        """
-
         # Print policy information
         self.print_policy_info()
         print(
@@ -204,49 +185,17 @@ class TrainP2e(TrainBase):
         #os.makedirs(rb_path, exist_ok=True)
         self.args.dataset_dir = None
         self.environment_interaction()
-        for epoch in tqdm(range(self.args.num_epochs)):
-            # Run train step
-            """a = 0
-            self.policy.train()
-            batch_result_list = []
-            for data in self.train_dataloader:
-                a = a + 1
-                print(a)
-                self.optimizer.zero_grad()
-                pred_action = self.policy(*[d.cuda() for d in data[0:2]])
-                loss = F.l1_loss(pred_action, data[2].cuda())
-                loss.backward()
-                self.optimizer.step()
-                batch_result_list.append(self.detach_batch_result({"loss": loss}))
-            self.log_epoch_summary(batch_result_list, "train", epoch)
-
-            # Run validation step
-            with torch.inference_mode():
-                self.policy.eval()
-                batch_result_list = []
-                for data in self.val_dataloader:
-                    pred_action = self.policy(*[d.cuda() for d in data[0:2]])
-                    loss = F.l1_loss(pred_action, data[2].cuda())
-                    batch_result_list.append(self.detach_batch_result({"loss": loss}))
-                epoch_summary = self.log_epoch_summary(batch_result_list, "val", epoch)
-
-                # Update best checkpoint
-                self.update_best_ckpt(epoch_summary)
-            """
-            
-            #self.replay_buffer.args.checkpoint = os.path.join(self.args.checkpoint_dir, "dummy")
-            
-            replay_buffer_num = 30
-            #if len(os.listdir(rb_path)) >= replay_buffer_num:
-            #    os.remove(os.path.join(rb_path, os.listdir(rb_path).sort()[:len(os.listdir(rb_path))-replay_buffer_num]))
-
+        pbar = tqdm(total = self.args.num_epochs * self.config.parameters.dreamer.collect_interval, desc="Training progress")
+        for epoch in range(self.args.num_epochs):
             #collect replay buffer
             for iteration in range(self.config.parameters.dreamer.collect_interval):
                 #for data in self.train_dataloader:
                 #    print("aa")
                 self.data = self.make_data() #rmbからp2eに使える形にデータ変換を行う
+                for i in self.data.keys():
+                    self.data[i] = self.data[i].to("cuda")
             
-                posterior, deterministics = self.policy.dynamic_learning(self.data)
+                posterior, deterministics = self.policy.p2e.dynamic_learning(self.data)
                 self.policy.p2e.behavior_learning(
                     self.policy.p2e.actor,
                     self.policy.p2e.critic,
@@ -257,28 +206,25 @@ class TrainP2e(TrainBase):
                 )
 
                 self.policy.p2e.behavior_learning(
-                    self.intrinsic_actor,
-                    self.intrinsic_critic,
-                    self.intrinsic_actor_optimizer,
-                    self.intrinsic_critic_optimizer,
+                    self.policy.p2e.intrinsic_actor,
+                    self.policy.p2e.intrinsic_critic,
+                    self.policy.p2e.intrinsic_actor_optimizer,
+                    self.policy.p2e.intrinsic_critic_optimizer,
                     posterior,
                     deterministics,
                 )
-                print(f"f{iteration} iteration finished")
+                pbar.update(1)
+                #print(f"{self.config.parameters.dreamer.collect_interval * epoch + iteration} iteration finished")
+                self.policy.p2e.save(epoch=epoch * self.config.parameters.dreamer.collect_interval + iteration)
                 
-
             self.environment_interaction()
             
                 
-
-
-
-
-
             # Save current checkpoint
             if epoch % max(self.args.num_epochs // 10, 1) == 0:
-                self.save_current_ckpt(f"epoch{epoch:0>3}")
+                self.save_current_ckpt(f"epoch{epoch:0>5}")
 
+        pbar.close()
         # Save last checkpoint
         self.save_current_ckpt("last")
 
@@ -388,15 +334,18 @@ class TrainP2e(TrainBase):
     def environment_interaction(self):
         #ロールアウトをする
         self.run_rollout()
-        print("rollout finished")
-        print(self.args.dataset_dir)
+
         if self.args.dataset_dir is None:
             self.args.dataset_dir, _ = os.path.split(self.rollout.filename)
-        print(self.args.dataset_dir)
+
         #収録したリプレイバッファのフォルダに存在するすべてのリプレイバッファからデータを作る
         self.all_filenames = find_rmb_files(self.args.dataset_dir, num_files=self.args.num_data)
-        print(self.all_filenames)
+        #データセットの数が一定を超えていたら古いものから削除する
+        if len(self.all_filenames) > self.max_buffer_num:
+            self.all_filenames = self.all_filenames.sort()[-self.max_buffer_num:]
         #このデータセット作成の部分でrmbのデータをp2e用に変換する
+
+        self.all_filenames.sort()
         self.make_data()
 
 
@@ -418,7 +367,6 @@ class TrainP2e(TrainBase):
 
         # Set data stats
         self.set_data_stats()
-        print("ohha")
 
         # Make dataloader
         #self.train_dataloader = self.make_dataloader(train_filenames, shuffle=True)
@@ -436,33 +384,6 @@ class TrainP2e(TrainBase):
 
         # Print dataset information
         #self.print_dataset_info()
-    """
-    def make_dataloader(self, filenames, shuffle=True):
-        dataset = self.DatasetClass(
-            filenames, self.model_meta_info, self.args.enable_rmb_cache
-        )
-        dataset = build_p2e_attrdict_dataset(
-            filenames,
-            self.model_meta_info,
-            enable_rmb_cache=self.args.enable_rmb_cache,
-            device="cpu",
-        )
-
-        if self.args.use_cached_dataset:
-            dataset = CachedDataset(dataset)
-
-        dataloader = DataLoader(
-            dataset,
-            batch_size=self.args.batch_size,
-            shuffle=shuffle,
-            pin_memory=True,
-            num_workers=self.args.num_workers,
-            persistent_workers=True,
-            prefetch_factor=4,
-        )
-    
-        return dataloader
-    """
 
 
 if __name__ == "__main__":

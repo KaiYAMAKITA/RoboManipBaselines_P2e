@@ -22,10 +22,10 @@ class P2ePolicy(nn.Module):
         self.p2e = p2e
 
         # Initialize weights
-        self._initialize_weights()
+        #self._initialize_weights()
 
-    def forward(self, data):
-        
+    """def forward(self, data):
+
         pass
 
 
@@ -88,3 +88,4 @@ class P2ePolicy(nn.Module):
                     else:
                         score_lst = np.append(score_lst, score)
                     break
+"""

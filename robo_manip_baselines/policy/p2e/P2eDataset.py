@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from attrdict import AttrDict
+import cv2
 
 from robo_manip_baselines.common import (
     DataKey,
@@ -40,8 +41,6 @@ def build_p2e_attrdict_dataset(
     # 1) エピソードごとに [T_i, ...] を作る
     for fname in filenames:
         with RmbData(fname, enable_rmb_cache) as rmb:
-            print(f"Loading episode from {fname}...")
-            print("reards" if "reward" in rmb.keys() else "None")
             T = rmb[DataKey.TIME][::skip].shape[0]
             lengths.append(T)
 
@@ -76,19 +75,19 @@ def build_p2e_attrdict_dataset(
             
             # --- reward [T, 1] ---
             if reward_keys[0] in rmb.keys():
-              rwd_exist = True
-              if len(reward_keys) == 0:
-                  reward_np = None
-              else:
-                  reward_np = np.concatenate(
-                      [get_skipped_data_seq(rmb[key][:], key, skip)[:T, None] for key in reward_keys],
-                  ).astype(np.float32)
-         
+                rwd_exist = True
+                if len(reward_keys) == 0:
+                    reward_np = None
+                else:
+                    reward_np = np.concatenate(
+                        [get_skipped_data_seq(rmb[key][:], key, skip)[:T, None] for key in reward_keys],
+                    ).astype(np.float32)
+        
             per_epi_state.append(state_np)
             per_epi_action.append(action_np)
             per_epi_images.append(images_np)
             if reward_keys[0] in rmb.keys():
-              per_epi_reward.append(reward_np)
+                per_epi_reward.append(reward_np)
 
 
     # 2) L を決定（最大長）
@@ -113,7 +112,7 @@ def build_p2e_attrdict_dataset(
     per_epi_state = [pad_to_L_edge(x, L) for x in per_epi_state]
     per_epi_action = [pad_to_L_edge(x, L) for x in per_epi_action]
     if rwd_exist:
-      per_epi_reward = [pad_to_L_edge(x, L) for x in per_epi_reward]
+        per_epi_reward = [pad_to_L_edge(x, L) for x in per_epi_reward]
     if any(img is not None for img in per_epi_images):
         # 画像が1つでもあるなら None のエピソードは空画像で用意（通常は起きない想定）
         first_img = next(img for img in per_epi_images if img is not None)
@@ -163,15 +162,7 @@ def build_p2e_attrdict_dataset(
     if rwd_exist:
       reward = reward.to(dtype=torch.float32, device=device)
 
-    print("states")
-    print(state.shape)
-    print("actions")
-    print(action.shape)
-    print("images")
-    print(images.shape)
-    if rwd_exist : #ここで上3つとデータ数で差が出ていたらrewardがきちんと記録されているかどうかを確認
-      print("rewards")
-      print(reward.shape)
+
 
     state = state[:, :L-1, :]
     action = action[:, :L-1, :]
@@ -181,6 +172,10 @@ def build_p2e_attrdict_dataset(
       reward = reward[:, :L-1, :]
     done = torch.zeros_like(reward, dtype=torch.float32)
 
+    observation = torch.squeeze(observation, dim=2)
+    observation = crop_resize_batch(torch.permute(observation, (0,1,4,2,3)))  # [N, L, 3, H, W]
+    next_observation = torch.squeeze(next_observation, dim=2)
+    next_observation = crop_resize_batch(torch.permute(next_observation, (0,1,4,2,3)))  # [N, L, 3, H, W]
     """
     return AttrDict(
         state=state,    # [N, L, Ds]
@@ -204,3 +199,39 @@ def build_p2e_attrdict_dataset(
         done=done,  # [N, L, 1]
     )
 
+
+def crop_resize_batch(images):
+    """
+    images: torch.Tensor [B, L, 3, 480, 640], uint8 推奨
+    return: torch.Tensor [B, L, 3, 64, 64]
+    """
+    B, L, C, H, W = images.shape
+    assert (C, H, W) == (3, 480, 640)
+
+    # numpy 形式へ (B*L, 480, 640, 3)
+    imgs = images.permute(0,1,3,4,2).reshape(B*L, H, W, C).cpu().numpy()
+
+    # 出力バッファ (B*L, 64, 64, 3)
+    out = np.empty((B*L, 64, 64, 3), dtype=np.uint8)
+
+    # クロップ位置（中央480）
+    left = (W - 480) // 2
+    right = left + 480
+
+    for i in range(B * L):
+        # --- ① 横を480にクロップ ---
+        crop = imgs[i][:, left:right, :]        # (480, 480, 3)
+
+        # --- ② cv2で64×64へリサイズ ---
+        resized = cv2.resize(
+            crop,
+            (64, 64),
+            interpolation=cv2.INTER_AREA
+        )
+
+        out[i] = resized
+
+    # Torchテンソルに戻す → [B, L, 3, 64, 64]
+    out = torch.from_numpy(out).reshape(B, L, 64, 64, 3).permute(0, 1, 4, 2, 3)
+
+    return out /255.0  # [0.0, 1.0]
