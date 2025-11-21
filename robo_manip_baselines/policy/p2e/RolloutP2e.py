@@ -9,6 +9,8 @@ from .P2ePolicy import P2ePolicy
 import importlib
 from torch.utils.tensorboard import SummaryWriter
 from matplotlib.backends.backend_agg import FigureCanvasAgg
+import argparse
+import time
 
 import yaml
 import types
@@ -32,6 +34,155 @@ def load_config(config_path: str) -> AttrDict:
 
 class RolloutP2e(RolloutBase): 
 
+    checkpoint_dir = ""
+
+    def __init__(self, log_dir=""):
+        self.checkpoint_dir = log_dir
+        super().__init__()
+
+    def setup_args(self, parser=None, argv=None):
+
+        if parser is None:
+            parser = argparse.ArgumentParser(
+                formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+                exit_on_error=False, #for debug
+            )
+
+        parser.add_argument(
+            "--checkpoint", type=str, required=True, help="checkpoint file"
+        )
+
+        parser.add_argument(
+            "--world_idx",
+            type=int,
+            default=0,
+            help="world index (if '--world_idx_list' option is specified, it takes precedence)",
+        )
+        parser.add_argument(
+            "--world_idx_list",
+            type=int,
+            nargs="*",
+            default=None,
+            help="list of world indexes",
+        )
+        parser.add_argument(
+            "--world_idx_repeat_count",
+            type=int,
+            default=1,
+            help="number of times to repeat world indexes",
+        )
+        parser.add_argument(
+            "--world_random_scale",
+            nargs="+",
+            type=float,
+            default=None,
+            help="random scale of simulation world (no randomness by default)",
+        )
+
+        parser.add_argument(
+            "--skip",
+            type=int,
+            help="step interval to infer policy",
+        )
+        parser.add_argument(
+            "--skip_draw",
+            type=int,
+            help="step interval to draw the plot",
+        )
+
+        parser.add_argument("--seed", type=int, default=-1, help="random seed")
+
+        parser.add_argument(
+            "--no_render",
+            action="store_true",
+            help="whether to disable simulation rendering",
+        )
+        parser.add_argument(
+            "--no_plot", action="store_true", help="whether to disable policy plot"
+        )
+        parser.add_argument(
+            "--win_xy_plot",
+            type=int,
+            nargs=2,
+            help="xy position of window to plot policy information",
+        )
+
+        parser.add_argument(
+            "--wait_before_start",
+            action="store_true",
+            help="whether to wait a key input before starting motion",
+        )
+        parser.add_argument(
+            "--auto_exit",
+            action="store_true",
+            help="whether to automatically exit from rollout",
+        )
+        parser.add_argument(
+            "--max_duration",
+            type=float,
+            default=30.0,
+            help=(
+                "maximum rollout duration for automatic exit [s] "
+                "(used only when '--auto_exit' option is enabled)"
+            ),
+        )
+
+        parser.add_argument(
+            "--save_rollout",
+            action="store_true",
+            help="whether to save rollout data",
+        )
+
+        parser.add_argument(
+            "--result_filename",
+            type=str,
+            default=None,
+            help="File path (*.yaml) to save rollout results (default: do not save)",
+        )
+
+        parser.add_argument(
+            "--save_last_image",
+            action="store_true",
+            help="whether to save the observation image of the last frame",
+        )
+        parser.add_argument(
+            "--output_image_dir",
+            type=str,
+            default=".",
+            help=(
+                "directory to save the output image (default: current directory, "
+                "used only when '--output_image_dir' option is enabled)."
+            ),
+        )
+
+        parser.add_argument(
+            "--demo_name", type=str, default="", help="demonstration name"
+        )
+        parser.add_argument(
+            "--target_task", type=str, default=None, help="target task name"
+        )
+        if self.require_task_desc:
+            parser.add_argument(
+                "--task_desc", type=str, required=True, help="task description"
+            )
+
+        self.set_additional_args(parser)
+
+        if argv is None:
+            argv = sys.argv
+        self.args = parser.parse_args(argv[1:])
+        
+
+        if self.args.world_idx_list is None:
+            self.args.world_idx_list = [self.args.world_idx]
+        self.args.world_idx_list *= self.args.world_idx_repeat_count
+
+        if self.args.world_random_scale is not None:
+            self.args.world_random_scale = np.array(self.args.world_random_scale)
+
+        if self.args.seed < 0:
+            self.args.seed = int(time.time()) % (2**32)
+
     def setup_policy(self):
         
         #self.args.
@@ -44,6 +195,7 @@ class RolloutP2e(RolloutBase):
         #define P2E
 
         self.config = load_config("../third_party/SimpleDreamer/dreamer/configs/p2e-dmc-walker-walk.yml")
+        self.config.operation.log_dir = self.checkpoint_dir
         self.p2e = Plan2Explore(
             observation_shape=(3, 64, 64),
             discrete_action_bool=False,
@@ -51,6 +203,7 @@ class RolloutP2e(RolloutBase):
             writer=SummaryWriter(log_dir="/tmp"),
             device="cuda",
             config=self.config,
+            log_dir=self.checkpoint_dir
         )
 
         self.policy = P2ePolicy(p2e=self.p2e)
