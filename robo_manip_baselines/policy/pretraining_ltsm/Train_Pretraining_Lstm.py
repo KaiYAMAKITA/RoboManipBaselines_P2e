@@ -4,19 +4,19 @@ from tqdm import tqdm
 
 from robo_manip_baselines.common import TrainBase
 
-from .CnnMlpDataset import CnnMlpDataset
-from .CnnMlpPolicy import CnnMlpPolicy
+from .Pretraining_Lstm_Dataset import Pretraining_Lstm_Dataset
+from .Pretraining_Lstm_Policy import Pretraining_Lstm_Policy
 
 
-class TrainCnnMlp(TrainBase):
-    DatasetClass = CnnMlpDataset
+class Train_Pretraining_Lstm(TrainBase):
+    DatasetClass = Pretraining_Lstm_Dataset
 
     def set_additional_args(self, parser):
         parser.set_defaults(enable_rmb_cache=True)
 
         parser.set_defaults(batch_size=32)
-        parser.set_defaults(num_epochs=10000)
-        parser.set_defaults(lr=1e-4)
+        parser.set_defaults(num_epochs=40)
+        parser.set_defaults(lr=1e-5)
 
         parser.add_argument(
             "--weight_decay", type=float, default=1e-4, help="weight decay"
@@ -64,7 +64,7 @@ class TrainCnnMlp(TrainBase):
         }
 
         # Construct policy
-        self.policy = CnnMlpPolicy(
+        self.policy = Pretraining_Lstm_Policy(
             len(self.model_meta_info["state"]["example"]),
             len(self.model_meta_info["action"]["example"]),
             len(self.args.camera_names),
@@ -91,7 +91,6 @@ class TrainCnnMlp(TrainBase):
             self.policy.train()
             batch_result_list = []
             for data in self.train_dataloader:
-                print(data[0].shape, data[1].shape, data[2].shape)
                 self.optimizer.zero_grad()
                 pred_action = self.policy(*[d.cuda() for d in data[0:2]])
                 loss = F.l1_loss(pred_action, data[2].cuda())
@@ -114,10 +113,6 @@ class TrainCnnMlp(TrainBase):
                 self.update_best_ckpt(epoch_summary)
 
             # Save current checkpoint
-            if self.args.num_epochs % 1000 == 0 and epoch % max(self.args.num_epochs // 1000, 1) == 0 and epoch < self.args.num_epochs // 100:
-                self.save_current_ckpt(f"epoch{epoch:0>3}")
-            if self.args.num_epochs % 100 == 0 and epoch % max(self.args.num_epochs // 100, 1) == 0 and epoch < self.args.num_epochs // 10:
-                self.save_current_ckpt(f"epoch{epoch:0>3}")
             if epoch % max(self.args.num_epochs // 10, 1) == 0:
                 self.save_current_ckpt(f"epoch{epoch:0>3}")
 

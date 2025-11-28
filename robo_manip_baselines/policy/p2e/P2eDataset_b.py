@@ -9,18 +9,21 @@ from robo_manip_baselines.common import (
 )
 
 
-class MlpDataset(DatasetBase):
+class P2eDataset(DatasetBase):
     """Dataset to train MLP policy."""
 
     def setup_variables(self):
         skip = self.model_meta_info["data"]["skip"]
 
         self.chunk_info_list = []
+        print(f"filenames: {self.filenames}")
         for episode_idx, filename in enumerate(self.filenames):
+            print(episode_idx)
             with RmbData(filename) as rmb_data:
                 episode_len = rmb_data[DataKey.TIME][::skip].shape[0]
                 for start_time_idx in range(0, episode_len):
                     self.chunk_info_list.append((episode_idx, start_time_idx))
+                print(f"{len(self.chunk_info_list)} chunks loaded.")
 
     def __len__(self):
         return len(self.chunk_info_list)
@@ -77,6 +80,7 @@ class MlpDataset(DatasetBase):
                 ],
                 axis=0,
             )
+            print(f"sarnsssd{rmb_data['reward']}")
 
         # Pre-convert data
         state, action, images = self.pre_convert_data(state, action, images)
@@ -85,11 +89,19 @@ class MlpDataset(DatasetBase):
         state_tensor = torch.tensor(state, dtype=torch.float32)
         action_tensor = torch.tensor(action, dtype=torch.float32)
         images_tensor = torch.tensor(images, dtype=torch.uint8)
+        print(state_tensor.shape, action_tensor.shape, images_tensor.shape)
 
         # Augment data
         state_tensor, action_tensor, images_tensor = self.augment_data(
             state_tensor, action_tensor, images_tensor
         )
-        
+
         # Sort in the order of policy inputs and outputs
         return state_tensor, images_tensor, action_tensor
+
+
+
+
+
+
+## rewardをrmbデータから取得したいが、方法がわからない

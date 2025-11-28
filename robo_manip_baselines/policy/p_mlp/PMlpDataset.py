@@ -9,7 +9,7 @@ from robo_manip_baselines.common import (
 )
 
 
-class MlpDataset(DatasetBase):
+class PMlpDataset(DatasetBase):
     """Dataset to train MLP policy."""
 
     def setup_variables(self):

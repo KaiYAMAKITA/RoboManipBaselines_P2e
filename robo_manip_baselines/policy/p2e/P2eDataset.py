@@ -39,6 +39,7 @@ def build_p2e_attrdict_dataset(
     lengths = []
 
     # 1) エピソードごとに [T_i, ...] を作る
+    filenames = sorted(filenames)
     for fname in filenames:
         with RmbData(fname, enable_rmb_cache) as rmb:
             T = rmb[DataKey.TIME][::skip].shape[0]
@@ -52,6 +53,7 @@ def build_p2e_attrdict_dataset(
                     [get_skipped_data_seq(rmb[key][:], key, skip)[:T] for key in state_keys],
                     axis=1,
                 ).astype(np.float32)
+                
 
             # --- action [T, Da] ---
             if len(action_keys) == 0:
@@ -132,6 +134,7 @@ def build_p2e_attrdict_dataset(
     if len(per_epi_state) > 0:
         state_dim = per_epi_state[0].shape[1]
         state = torch.from_numpy(np.stack(per_epi_state, axis=0)) if state_dim > 0 else torch.empty((N, L, 0), dtype=torch.float32)
+        print(state.shape)
     else:
         state = torch.empty((0, 0, 0), dtype=torch.float32)
 
@@ -149,18 +152,18 @@ def build_p2e_attrdict_dataset(
     
     # reward
     if rwd_exist:
-      if len(per_epi_reward) > 0:
-          reward_dim = per_epi_reward[0].shape[1]
-          reward = torch.from_numpy(np.stack(per_epi_reward, axis=0)) if reward_dim > 0 else torch.empty((N, L, 0), dtype=torch.float32)
-      else:
-          reward = torch.empty((0, 0, 0), dtype=torch.float32)
+        if len(per_epi_reward) > 0:
+            reward_dim = per_epi_reward[0].shape[1]
+            reward = torch.from_numpy(np.stack(per_epi_reward, axis=0)) if reward_dim > 0 else torch.empty((N, L, 0), dtype=torch.float32)
+        else:
+            reward = torch.empty((0, 0, 0), dtype=torch.float32)
 
     # 5) デバイス・dtype
     state  = state.to(dtype=torch.float32, device=device)
     action = action.to(dtype=torch.float32, device=device)
     images = images.to(device=device)  # 画像はuint8のまま
     if rwd_exist:
-      reward = reward.to(dtype=torch.float32, device=device)
+        reward = reward.to(dtype=torch.float32, device=device)
 
 
 
@@ -169,7 +172,7 @@ def build_p2e_attrdict_dataset(
     observation = images[:, :L-1, :, :, :, :]
     next_observation = images[:, 1:, :, :, :, :]
     if rwd_exist:
-      reward = reward[:, :L-1, :]
+        reward = reward[:, :L-1, :]
     done = torch.zeros_like(reward, dtype=torch.float32)
 
     observation = torch.squeeze(observation, dim=2)
@@ -184,13 +187,13 @@ def build_p2e_attrdict_dataset(
         reward=reward if rwd_exist else None,  # [N, L, 1]
     )"""
     if rwd_exist:
-      return AttrDict(
-        observation=observation,  # [N, L, C, H, W, 3]
-        action=action,  # [N, L, Da]
-        reward=reward,  # [N, L, 1]
-        next_observation=next_observation,  # [N, L, C, H, W, 3]
-        done=done,  # [N, L, 1]
-      )
+        return AttrDict(
+            observation=observation,  # [N, L, C, H, W, 3]
+            action=action,  # [N, L, Da]
+            reward=reward,  # [N, L, 1]
+            next_observation=next_observation,  # [N, L, C, H, W, 3]
+            done=done,  # [N, L, 1]
+        )
     
     return AttrDict(
         observation=observation,  # [N, L, C, H, W, 3]
@@ -235,3 +238,161 @@ def crop_resize_batch(images):
     out = torch.from_numpy(out).reshape(B, L, 64, 64, 3).permute(0, 1, 4, 2, 3)
 
     return out /255.0  # [0.0, 1.0]
+
+
+@torch.no_grad()
+def check_p2e_dataset_bounds(
+    filenames,
+    model_meta_info,
+    enable_rmb_cache: bool = False,
+    device: torch.device | str = "cpu",
+):
+    """
+    戻り値: AttrDict({
+        'state':  FloatTensor [N, L, state_dim],
+        'action': FloatTensor [N, L, action_dim],
+        'images': UInt8Tensor [N, L, N_cam, H, W, 3],
+    })
+    ※ 各エピソードの長さが異なる場合は、最後のフレームをリピートして L(=max長) に揃えます。
+    """
+    skip = model_meta_info["data"]["skip"]
+
+    state_keys  = model_meta_info.get("state", {}).get("keys", [])
+
+    per_epi_state = []
+    lengths = []
+
+    # 1) エピソードごとに [T_i, ...] を作る
+    filenames = sorted(filenames)
+    for fname in filenames:
+        with RmbData(fname, enable_rmb_cache) as rmb:
+            T = rmb[DataKey.TIME][::skip].shape[0]
+            lengths.append(T)
+
+            # --- state [T, Ds] ---
+            if len(state_keys) == 0:
+                state_np = np.zeros((T, 0), dtype=np.float32)
+            else:
+                state_np = np.concatenate(
+                    [get_skipped_data_seq(rmb[key][:], key, skip)[:T] for key in state_keys],
+                    axis=1,
+                ).astype(np.float32)
+
+            per_epi_state.append(state_np)
+
+    # 2) L を決定（最大長）
+    L = max(lengths) if len(lengths) > 0 else 0
+    N = len(filenames)
+
+    # 3) 時間長を L にパディング（不足分は最後のフレームをリピート）
+    def pad_to_L_edge(x, L):
+        if x is None:
+            return None
+        T = x.shape[0]
+        if T == L:
+            return x
+        if T == 0:
+            # ありえないが安全策（edgeパディングできないため0埋め）
+            out_shape = (L,) + x.shape[1:]
+            return np.zeros(out_shape, dtype=x.dtype)
+        pad_width = [(0, L - T)] + [(0, 0)] * (x.ndim - 1)
+        # 'edge' で末尾フレームを繰り返す
+        return np.pad(x, pad_width=pad_width, mode='edge')
+
+    per_epi_state = [pad_to_L_edge(x, L) for x in per_epi_state]
+
+    if len(per_epi_state) > 0:
+        state_dim = per_epi_state[0].shape[1]
+        state = torch.from_numpy(np.stack(per_epi_state, axis=0)) if state_dim > 0 else torch.empty((N, L, 0), dtype=torch.float32)
+    else:
+        state = torch.empty((0, 0, 0), dtype=torch.float32)
+
+    # 5) デバイス・dtype
+    state  = state.to(dtype=torch.float32, device=device)
+
+    state = state[:, :L-1, :]
+    
+    return minmax_last_dim(state)
+
+
+@torch.no_grad()
+def calc_x(
+    filenames,
+    model_meta_info,
+    base_range,
+    enable_rmb_cache: bool = False,
+    device: torch.device | str = "cpu",
+):
+    skip = model_meta_info["data"]["skip"]
+
+    state_keys  = model_meta_info.get("state", {}).get("keys", [])
+
+    scale_list = []
+
+    # 1) エピソードごとに [T_i, ...] を作る
+    filenames = sorted(filenames)
+    for fname in filenames:
+        with RmbData(fname, enable_rmb_cache) as rmb:
+            T = rmb[DataKey.TIME][::skip].shape[0]
+
+            # --- state [T, Ds] ---
+            if len(state_keys) == 0:
+                state_np = np.zeros((T, 0), dtype=np.float32)
+            else:
+                
+                state_np = np.concatenate(
+                    [get_skipped_data_seq(rmb[key][:], key, skip)[:T] for key in state_keys],
+                    axis=1,
+                ).astype(np.float32)
+                data_range = minmax_last_dim_np(state_np[:,:-1])
+                
+                _, overall = required_scale_factor(base_range, torch.from_numpy(data_range).to(device))
+                print("overall:", overall)
+                scale_list.append(overall.item())
+                
+    
+    return scale_list
+
+
+def minmax_last_dim(x: torch.Tensor) -> torch.Tensor:
+    """
+    x: shape [N, T, 6]
+
+    returns: shape [2, 6]
+        result[0] = min values across (N, T)
+        result[1] = max values across (N, T)
+    """
+    # x.min(dim=(0,1)) はできないので reshape か view を使う
+    x_flat = x.reshape(-1, x.shape[-1])  # [N*T, 6]
+
+    min_vals = x_flat.min(dim=0).values  # [6]
+    max_vals = x_flat.max(dim=0).values  # [6]
+
+    return torch.stack([min_vals, max_vals], dim=0)  # [2, 6]
+
+import numpy as np
+
+def minmax_last_dim_np(x: np.ndarray) -> np.ndarray:
+
+    # 最後の6次元を残して、全体の min/max を取る
+    min_vals = x.min(axis=0)  # shape [6]
+    max_vals = x.max(axis=0)  # shape [6]
+
+    return np.stack([min_vals, max_vals], axis=0)  # shape [2, 6]
+
+
+
+def required_scale_factor(base: torch.Tensor, other: torch.Tensor):
+    base_min, base_max = base
+    other_min, other_max = other
+
+    center = (base_min + base_max) / 2
+    base_half = (base_max - base_min) / 2
+
+    other_half_min = (center - other_min).abs()
+    other_half_max = (other_max - center).abs()
+
+    needed_scale = torch.maximum(other_half_min / base_half,other_half_max / base_half)
+
+    overall = needed_scale.max()
+    return needed_scale, overall

@@ -79,6 +79,7 @@ class TrainP2e(TrainBase):
         #del sys.argv[sys.argv.index("--checkpoint")]
         #sys.argv += ["--dataset_dir", "dummy"]
         sys.argv += ["--dataset_dir", "policy/p2e/test"]
+        print(sys.argv)
         super().__init__()
         
         #self.setup_policy()
@@ -94,6 +95,19 @@ class TrainP2e(TrainBase):
                 formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                 exit_on_error=False, #for debug
             )
+        parser.add_argument(
+            "--range_dataset",
+            type=str,
+            default=None,
+            help="range of data to use",
+        )
+
+        parser.add_argument(
+            "--range_scale",
+            type=float,
+            default=None,
+            help="range of data to use",
+        )
 
         parser.add_argument(
             "--dataset_dir",
@@ -258,6 +272,7 @@ class TrainP2e(TrainBase):
         sys.argv = [sys.argv[0]] + self.stash
         
         sys.argv += ["--no_render", "--no_plot"]
+        #sys.argv += ["--no_plot"]
         
         self.setup_rollout()
         self.rollout.policy.p2e.save(epoch=0)
@@ -268,7 +283,7 @@ class TrainP2e(TrainBase):
         parser.set_defaults(enable_rmb_cache=True)
 
         parser.set_defaults(batch_size=32)
-        parser.set_defaults(num_epochs=100)
+        parser.set_defaults(num_epochs=1)
         parser.set_defaults(lr=1e-5)
 
         
@@ -331,24 +346,6 @@ class TrainP2e(TrainBase):
         #define P2E
         self.config = load_config("../third_party/SimpleDreamer/dreamer/configs/p2e-dmc-walker-walk.yml")
         self.config.operation.log_dir = self.args.checkpoint_dir
-        """self.p2e = Plan2Explore(
-            observation_shape=(3, 64, 64),
-            discrete_action_bool=False,
-            action_size=7,
-            writer=SummaryWriter(log_dir="/tmp"),
-            device="cuda",
-            config=self.config,
-            log_dir=self.args.checkpoint_dir,
-        )
-
-        self.policy = P2ePolicy(p2e=self.p2e)
-        self.policy.p2e.save(epoch=0)"""
-
-        # Print policy information
-        #self.print_policy_info()
-        #print(
-        #    f"  - obs steps: {self.args.n_obs_steps}, action steps: {self.args.n_action_steps}"
-        #)
 
     def train_loop(self):
         
@@ -362,28 +359,9 @@ class TrainP2e(TrainBase):
             for iteration in range(self.config.parameters.dreamer.collect_interval):
                 #for data in self.train_dataloader:
                 #    print("aa")
-                self.data = self.make_data() #rmbからp2eに使える形にデータ変換を行う
+                #self.data = self.make_data() #rmbからp2eに使える形にデータ変換を行う
                 for i in self.data.keys():
                     self.data[i] = self.data[i].to("cuda")
-                """
-                posterior, deterministics = self.policy.p2e.dynamic_learning(self.data)
-                self.policy.p2e.behavior_learning(
-                    self.policy.p2e.actor,
-                    self.policy.p2e.critic,
-                    self.policy.p2e.actor_optimizer,
-                    self.policy.p2e.critic_optimizer,
-                    posterior,
-                    deterministics,
-                )
-
-                self.policy.p2e.behavior_learning(
-                    self.policy.p2e.intrinsic_actor,
-                    self.policy.p2e.intrinsic_critic,
-                    self.policy.p2e.intrinsic_actor_optimizer,
-                    self.policy.p2e.intrinsic_critic_optimizer,
-                    posterior,
-                    deterministics,
-                )"""
 
                 posterior, deterministics = self.rollout.policy.p2e.dynamic_learning(self.data)
                 self.rollout.policy.p2e.behavior_learning(
@@ -419,13 +397,12 @@ class TrainP2e(TrainBase):
         pbar.close()
         # Save last checkpoint
         self.save_current_ckpt("last")
-
+        self.environment_interaction(full_rollout=True)
         # Save best checkpoint
-        self.save_best_ckpt()
+        #self.save_best_ckpt()
 
 
     def make_data(self):
-        
         data = build_p2e_attrdict_dataset(
             self.all_filenames,
             self.model_meta_info,
@@ -480,12 +457,17 @@ class TrainP2e(TrainBase):
         #self.rollout.checkpoint_dir = self.args.checkpoint_dir
 
 
-    def run_rollout(self):
-        self.rollout.run()
+    def run_rollout(self, full_rollout=False):
+        print(self.args.range_dataset)
+        print(self.args.range_scale)
+        self.rollout.run(full_rollout=full_rollout, ranges = {"dataset" : self.args.range_dataset, "scale": self.args.range_scale})
     
-    def environment_interaction(self):
+    def environment_interaction(self, full_rollout=False):
+        print(self.args.dataset_dir)
         #ロールアウトをする
-        self.run_rollout()
+        self.run_rollout(full_rollout=full_rollout)
+
+        print(self.args.dataset_dir)
 
         if self.args.dataset_dir is None:
             self.args.dataset_dir, _ = os.path.split(self.rollout.filename)
@@ -494,7 +476,8 @@ class TrainP2e(TrainBase):
         self.all_filenames = find_rmb_files(self.args.dataset_dir, num_files=self.args.num_data)
         #データセットの数が一定を超えていたら古いものから削除する
         if len(self.all_filenames) > self.max_buffer_num:
-            self.all_filenames = self.all_filenames.sort()[-self.max_buffer_num:]
+            self.all_filenames.sort()
+            self.all_filenames = self.all_filenames[-self.max_buffer_num:]
         #このデータセット作成の部分でrmbのデータをp2e用に変換する
 
         self.all_filenames.sort()
@@ -516,15 +499,14 @@ class TrainP2e(TrainBase):
             val_num = max(num_files - train_num, 1)
         else:
             val_num = max(int(np.clip(self.args.val_ratio, 0.0, 1.0) * num_files), 1)
-        train_filenames = self.all_filenames[:train_num]
-        val_filenames = self.all_filenames[-1 * val_num :]
+        #train_filenames = self.all_filenames[:train_num]
+        #val_filenames = self.all_filenames[-1 * val_num :]
 
         # Set data stats
         self.set_data_stats()
 
         # Make dataloader
-        #self.train_dataloader = self.make_dataloader(train_filenames, shuffle=True)
-        #self.val_dataloader = self.make_dataloader(val_filenames, shuffle=False)
+        print(self.all_filenames)
 
         self.data = build_p2e_attrdict_dataset(
             self.all_filenames,
@@ -534,11 +516,7 @@ class TrainP2e(TrainBase):
         )
         
         # Setup tensorboard
-        #print(f"a {self.args.checkpoint}")
         self.writer = SummaryWriter(self.args.checkpoint_dir)
-
-        # Print dataset information
-        #self.print_dataset_info()
 
     def set_data_stats(self):
         # Load dataset
@@ -624,8 +602,6 @@ class TrainP2e(TrainBase):
         )
         print(f"polsstht{self.args.dataset_dir}")
         
-        #self.args.dataset_dirがself.op.get_data_filename()になるようにすればいい。
-        #毎度更新されるself.op.get_data_filename()をどこかに保存しておけるようにしておきたい。どうする
         random.shuffle(self.all_filenames)
 
     def run(self):

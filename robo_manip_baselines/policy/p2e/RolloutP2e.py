@@ -4,6 +4,8 @@ import numpy as np
 import torch
 import os 
 from robo_manip_baselines.common import RolloutBase, denormalize_data, normalize_data
+from robo_manip_baselines.policy.p2e.P2eDataset import check_p2e_dataset_bounds, calc_x
+from robo_manip_baselines.common.utils.FileUtils import find_rmb_files
 import sys
 from .P2ePolicy import P2ePolicy
 import importlib
@@ -151,6 +153,7 @@ class RolloutP2e(RolloutBase):
             default=".",
             help=(
                 "directory to save the output image (default: current directory, "
+                
                 "used only when '--output_image_dir' option is enabled)."
             ),
         )
@@ -209,7 +212,7 @@ class RolloutP2e(RolloutBase):
         self.policy = P2ePolicy(p2e=self.p2e)
 
         
-        self.args.world_idx_list = [0 for i in range(5)]
+        self.args.world_idx_list = [0 for i in range(2)]
         self.args.save_rollout = True
         self.args.auto_exit = True
         self.args.max_duration = 10.0
@@ -288,8 +291,6 @@ class RolloutP2e(RolloutBase):
             (64, 64),           # (width, height)
             interpolation=cv2.INTER_AREA
         )
-
-
 
         image = np.moveaxis(image, -1, -3).copy()
         image = torch.tensor(image, dtype=torch.uint8)
@@ -385,22 +386,95 @@ class RolloutP2e(RolloutBase):
         if self.filename is None:
             self.modified_episode_index = 0
             self.filename = super().get_data_filename()
-            
+        
         else:
-            dirname = os.path.dirname(self.filename)
-            #self.filename = os.path.join(
-            #    dirname,
-            #    f"{self.demo_name}_world{self.data_manager.world_idx:0>1}_{self.data_manager.episode_idx:0>3}.rmb",
-            #)
-            self.modified_episode_index += 1
-            self.filename = os.path.join(
-                dirname,
-                f"{self.demo_name}_world{self.data_manager.world_idx:0>1}_{self.modified_episode_index:0>5}.rmb",
-            )
+            #もしロールアウトモードであれば
+
+            
+            if self.full_rollout:
+                print("full rollout mode")
+                if not os.path.exists(os.path.join(os.path.dirname(self.filename), "pretraining_data")):
+                    os.makedirs(os.path.join(os.path.dirname(self.filename), "pretraining_data") , exist_ok=True)
+                dirname = os.path.join(os.path.dirname(self.filename), "pretraining_data")
+                if self.ranges is not None:
+                    if self.modified_episode_index > 0 and (self.modified_episode_index + 1)%self.buff_size == 0:
+                        self.pretraining_filenames = find_rmb_files(dirname)
+                        self.scale_list = calc_x(self.pretraining_filenames, self.model_meta_info, self.dataset_range, device="cuda")
+                        count = sum(v <= self.ranges["scale"] for v in self.scale_list)
+                        print(self.scale_list)
+                        if count >= self.datanum:
+                            print("All data in the specified scale range have been collected.")
+                            np.save(os.path.dirname(self.filename) + "/scale_list.npy", np.array(self.scale_list))
+                            self.modified_episode_index += 1
+                            self.new_filename = os.path.join(
+                                dirname,
+                                f"{self.demo_name}_world{self.data_manager.world_idx:0>1}_{self.modified_episode_index:0>6}.rmb",
+                            )
+                            print(self.new_filename)
+                            return self.new_filename
+                        else:
+                            print(f"Collecting data... {count}/{self.datanum} done.")
+                            if len(self.args.world_idx_list) - self.modified_episode_index < self.datanum - count:
+                                self.args.world_idx_list = [0 for i in range(len(self.args.world_idx_list) + self.buff_size)]
+                            self.modified_episode_index += 1
+                            self.new_filename = os.path.join(
+                                dirname,
+                                f"{self.demo_name}_world{self.data_manager.world_idx:0>1}_{self.modified_episode_index:0>6}.rmb",
+                            )
+                            print(self.new_filename)
+                            return self.new_filename
+                    
+                    else:
+                        self.modified_episode_index += 1
+                        self.new_filename = os.path.join(
+                            dirname,
+                            f"{self.demo_name}_world{self.data_manager.world_idx:0>1}_{self.modified_episode_index:0>6}.rmb",
+                        )
+                        print(self.new_filename)
+                        return self.new_filename
+                else:
+                    self.modified_episode_index += 1
+                    self.new_filename = os.path.join(
+                        dirname,
+                        f"{self.demo_name}_world{self.data_manager.world_idx:0>1}_{self.modified_episode_index:0>6}.rmb",
+                    )
+                    print(self.new_filename)
+                    return self.new_filename
+
+                
+            else:
+                dirname = os.path.dirname(self.filename)
+                self.modified_episode_index += 1
+                self.filename = os.path.join(
+                    dirname,
+                    f"{self.demo_name}_world{self.data_manager.world_idx:0>1}_{self.modified_episode_index:0>6}.rmb",
+                )
+                print(self.filename)
+                return self.filename
         return self.filename
     
-    def run(self):
-        
+    def run(self, full_rollout=False, ranges=None):
+        self.full_rollout = full_rollout
+        if full_rollout:
+            self.modified_episode_index = -1
+            self.buff_size = 2
+            self.new_filename = self.filename
+            self.rollout_file_list = []
+            self.scale_list = []
+            self.datanum = 6
+            self.args.world_idx_list = [0 for i in range(self.datanum)]
+            if ranges["scale"] is not None:
+                self.ranges = ranges
+                self.dataset_filenames = find_rmb_files(self.ranges["dataset"])
+                self.dataset_range = check_p2e_dataset_bounds(self.dataset_filenames, self.model_meta_info, device="cuda")
+                self.dataset_range = self.dataset_range[:,:-1]
+                #print("sdfsdfs",self.dataset_range)
+            else:
+                self.ranges = None
+            
+        else:
+            #print("kottit")
+            self.range = None
         self.reset_flag = True
         self.quit_flag = False
         self.inference_duration_list = []
@@ -422,7 +496,6 @@ class RolloutP2e(RolloutBase):
             
             if self.args.save_rollout and self.phase_manager.is_phase("RolloutPhase"):
                 self.record_data()
-
             self.obs, self.reward, _, _, self.info = self.env.step(env_action)
 
             self.phase_manager.post_update()
@@ -448,6 +521,7 @@ class RolloutP2e(RolloutBase):
     def reset_variables(self):
         super().reset_variables()
 
+        self.state_buf = None
         #enviroment interaction
         self.posterior, self.deterministic = self.policy.p2e.rssm.recurrent_model_input_init(1)
         self.action = torch.zeros(1, self.policy.p2e.action_size).to(self.device)
